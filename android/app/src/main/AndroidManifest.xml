@@ -14,11 +14,19 @@
     android:usesCleartextTraffic="true">
 
         <activity
-            android:name=".MainActivity"
-            android:exported="true"
-            android:launchMode="singleTask"
-            android:windowSoftInputMode="adjustResize">
-        </activity>
+    android:name=".MainActivity"
+    android:exported="true"
+    android:launchMode="singleTask"
+    android:windowSoftInputMode="adjustResize">
+    
+    <!-- TAMBAHKAN BLOK INI -->
+    <intent-filter>
+        <action android:name="android.intent.action.MAIN" />
+        <category android:name="android.intent.category.LAUNCHER" />
+    </intent-filter>
+    <!-- SAMPAI SINI -->
+    
+</activity>
 
         <receiver
             android:name=".BootReceiver"
