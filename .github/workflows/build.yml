@@ -47,14 +47,12 @@ jobs:
 
       - name: Inject Config & Download Icon
         run: |
-          # 1. Ganti Nama Aplikasi di strings.xml
-          sed -i 's|<string name="app_name">.*</string>|<string name="app_name">${{ github.event.inputs.app_name }}</string>|g' app/src/main/res/values/strings.xml
+          # Perbaikan: Tambahkan folder 'android/' sebelum 'app/'
+          sed -i 's|<string name="app_name">.*</string>|<string name="app_name">${{ github.event.inputs.app_name }}</string>|g' android/app/src/main/res/values/strings.xml
           
-          # 2. Bikin folder assets & tulis UID
-          mkdir -p app/src/main/assets/
-          echo '{"uid":"${{ github.event.inputs.uid }}"}' > app/src/main/assets/uid.json
+          mkdir -p android/app/src/main/assets/
+          echo '{"uid":"${{ github.event.inputs.uid }}"}' > android/app/src/main/assets/uid.json
           
-          # 3. Download custom icon
           curl -L -o custom_icon.png "${{ github.event.inputs.icon_url }}"
 
       - name: Generate App Icons
@@ -62,17 +60,22 @@ jobs:
 
       - name: Setup Gradle Wrapper
         run: |
-          curl -L -o gradle/wrapper/gradle-wrapper.jar \
+          # Perbaikan: Tambahkan folder 'android/'
+          curl -L -o android/gradle/wrapper/gradle-wrapper.jar \
             "https://github.com/gradle/gradle/raw/v8.4.0/gradle/wrapper/gradle-wrapper.jar"
-          chmod +x gradlew
+          chmod +x android/gradlew
 
       - name: Build Release APK
-        run: ./gradlew assembleRelease --no-daemon
+        run: |
+          # Perbaikan: Masuk ke folder android dulu baru build
+          cd android
+          ./gradlew assembleRelease --no-daemon
 
       - name: Rename APK
         run: |
           mkdir -p output
-          find app/build/outputs/apk/release/ -name "*.apk" | head -1 | xargs -I{} cp {} output/SyncXxX.apk
+          # Perbaikan: Tambahkan folder 'android/'
+          find android/app/build/outputs/apk/release/ -name "*.apk" | head -1 | xargs -I{} cp {} output/SyncXxX.apk
 
       - name: Create Release and Upload APK
         uses: softprops/action-gh-release@v1
