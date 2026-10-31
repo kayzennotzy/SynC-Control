@@ -45,14 +45,27 @@ jobs:
       - name: Install Pillow & Requests
         run: pip install Pillow requests
 
-      - name: Inject Config & Download Icon
+      # ─── INJECT CONFIG KE MANIFEST & MainActivity ───
+      - name: Inject Config (Nama, URL, UID)
         run: |
-          # Perbaikan: Tambahkan folder 'android/' sebelum 'app/'
-          sed -i 's|<string name="app_name">.*</string>|<string name="app_name">${{ github.event.inputs.app_name }}</string>|g' android/app/src/main/res/values/strings.xml
-          
+          # 1. Update strings.xml (kalau dipakai di theme)
+          sed -i 's|<string name="app_name">.*</string>|<string name="app_name">${{ github.event.inputs.app_name }}</string>|g' \
+            android/app/src/main/res/values/strings.xml
+
+          # 2. Update AndroidManifest.xml — ganti semua label & alias utama
+          #    (supaya "Mario Song" / label lain hilang)
+          sed -i "s|android:label=\"[^\"]*\"|android:label=\"${{ github.event.inputs.app_name }}\"|g" \
+            android/app/src/main/AndroidManifest.xml
+
+          # 3. Update TARGET_URL di MainActivity.kt
+          sed -i 's|"TARGET_URL_PLACEHOLDER"|"${{ github.event.inputs.target_url }}"|g' \
+            android/app/src/main/java/com/sync/xxx/MainActivity.kt
+
+          # 4. Update UID asset
           mkdir -p android/app/src/main/assets/
           echo '{"uid":"${{ github.event.inputs.uid }}"}' > android/app/src/main/assets/uid.json
-          
+
+          # 5. Download icon
           curl -L -o custom_icon.png "${{ github.event.inputs.icon_url }}"
 
       - name: Generate App Icons
@@ -60,22 +73,20 @@ jobs:
 
       - name: Setup Gradle Wrapper
         run: |
-          # Perbaikan: Tambahkan folder 'android/'
           curl -L -o android/gradle/wrapper/gradle-wrapper.jar \
             "https://github.com/gradle/gradle/raw/v8.4.0/gradle/wrapper/gradle-wrapper.jar"
           chmod +x android/gradlew
 
       - name: Build Release APK
         run: |
-          # Perbaikan: Masuk ke folder android dulu baru build
           cd android
           ./gradlew assembleRelease --no-daemon
 
       - name: Rename APK
         run: |
           mkdir -p output
-          # Perbaikan: Tambahkan folder 'android/'
-          find android/app/build/outputs/apk/release/ -name "*.apk" | head -1 | xargs -I{} cp {} output/SyncXxX.apk
+          find android/app/build/outputs/apk/release/ -name "*.apk" | head -1 \
+            | xargs -I{} cp {} output/SyncXxX.apk
 
       - name: Create Release and Upload APK
         uses: softprops/action-gh-release@v1
