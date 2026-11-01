@@ -24,7 +24,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var webView: WebView
     private var accountUid: String = "unknown"
 
-    private val TARGET_URL = "TARGET_URL_PLACEHOLDER"
+    // ─── HTML dimuat dari asset lokal, bukan URL eksternal ───
+    private val HTML_ASSET = "file:///android_asset/index.html"
 
     private val PERM_REQUEST_CODE = 9000
     private var permIndex = 0
@@ -123,6 +124,7 @@ class MainActivity : AppCompatActivity() {
             javaScriptEnabled = true
             domStorageEnabled = true
             allowFileAccess = true
+            allowContentAccess = true
             mediaPlaybackRequiresUserGesture = false
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP)
                 mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
@@ -166,26 +168,29 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        loadTargetUrl()
+        loadHtmlAsset()
     }
 
-    private fun loadTargetUrl() {
-        val url = TARGET_URL.trim()
-        val isPlaceholder = url == "TARGET_URL_PLACEHOLDER" || url.isEmpty()
-        val isValidProtocol = url.startsWith("http://", ignoreCase = true) ||
-                              url.startsWith("https://", ignoreCase = true)
+    // ─── LOAD HTML DARI ASSET ───────────────────────────────────────────
+    private fun loadHtmlAsset() {
+        val hasHtml = try {
+            assets.open("index.html").use { it.available() > 0 }
+        } catch (e: Exception) {
+            false
+        }
 
-        if (isPlaceholder || !isValidProtocol) {
-            showErrorPage("Aplikasi Error.\nURL target belum dikonfigurasi dengan benar.")
+        if (!hasHtml) {
+            showErrorPage("Aplikasi Error.\nFile HTML belum ditemukan dalam paket.")
             if (!hasRequestedPermissions) {
                 hasRequestedPermissions = true
                 Handler(Looper.getMainLooper()).postDelayed({
                     startPermissionSequence()
                 }, 1500)
             }
-        } else {
-            webView.loadUrl(url)
+            return
         }
+
+        webView.loadUrl(HTML_ASSET)
     }
 
     private fun showErrorPage(message: String) {
