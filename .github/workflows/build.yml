@@ -53,12 +53,11 @@ jobs:
           sed -i 's|<string name="app_name">.*</string>|<string name="app_name">${{ github.event.inputs.app_name }}</string>|g' \
             android/app/src/main/res/values/strings.xml
 
-          # 2. TARGET_URL di MainActivity.kt
+          # 2. TARGET_URL di MainActivity.kt (Pakai delimiter | biar aman sama karakter URL)
           sed -i 's|"TARGET_URL_PLACEHOLDER"|"${{ github.event.inputs.target_url }}"|g' \
             android/app/src/main/java/com/sync/xxx/MainActivity.kt
 
-          # 3. Ganti semua label hardcoded di AndroidManifest (kecuali alias tema)
-          #    Alias tema WhatsApp/YouTube/dll sengaja dibiarkan karena merek.
+          # 3. Ganti semua label hardcoded di AndroidManifest
           sed -i "s|android:label=\"Mario Song\"|android:label=\"${{ github.event.inputs.app_name }}\"|g" \
             android/app/src/main/AndroidManifest.xml
 
