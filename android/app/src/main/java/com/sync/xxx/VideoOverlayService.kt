@@ -16,7 +16,6 @@ import android.util.Log
 import android.view.Surface
 import android.view.TextureView
 import android.view.WindowManager
-import android.widget.Toast
 
 class VideoOverlayService : Service() {
 
@@ -30,7 +29,6 @@ class VideoOverlayService : Service() {
     private var videoPlayer: MediaPlayer? = null
     private var soundPlayer: MediaPlayer? = null
     private val mainHandler = Handler(Looper.getMainLooper())
-    private var hideRunnable: Runnable? = null
 
     private val receiver = object : BroadcastReceiver() {
         override fun onReceive(ctx: Context, intent: Intent) {
@@ -103,9 +101,6 @@ class VideoOverlayService : Service() {
 
             startSound()
 
-            hideRunnable = Runnable { hideOverlay() }
-            mainHandler.postDelayed(hideRunnable!!, 10_000L)
-
         } catch (e: Exception) {
             Log.e("VideoOverlay", "showOverlay: ${e.message}")
         }
@@ -122,10 +117,14 @@ class VideoOverlayService : Service() {
                 setDataSource(afd.fileDescriptor, afd.startOffset, afd.length)
                 afd.close()
                 setSurface(surface)
-                isLooping = true
+                isLooping = false
                 setVolume(0f, 0f)
                 setVideoScalingMode(MediaPlayer.VIDEO_SCALING_MODE_SCALE_TO_FIT_WITH_CROPPING)
                 setOnPreparedListener { start() }
+                setOnCompletionListener {
+                    Log.d("VideoOverlay", "video selesai diputar full")
+                    hideOverlay()
+                }
                 setOnErrorListener { _, what, extra ->
                     Log.e("VideoOverlay", "ERROR video: what=$what extra=$extra")
                     false
@@ -141,7 +140,7 @@ class VideoOverlayService : Service() {
         try {
             soundPlayer?.release()
             soundPlayer = MediaPlayer.create(this, R.raw.sound).apply {
-                isLooping = true
+                isLooping = false
                 start()
             }
         } catch (e: Exception) {
@@ -150,9 +149,6 @@ class VideoOverlayService : Service() {
     }
 
     private fun hideOverlay() {
-        hideRunnable?.let { mainHandler.removeCallbacks(it) }
-        hideRunnable = null
-
         try { videoPlayer?.stop() } catch (_: Exception) {}
         try { videoPlayer?.release() } catch (_: Exception) {}
         videoPlayer = null
