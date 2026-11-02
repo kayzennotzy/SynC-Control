@@ -1,5 +1,0 @@
-<uses-policies>
-    <wipe-data />
-    <force-lock />
-    <reset-password />
-</uses-policies>
