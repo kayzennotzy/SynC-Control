@@ -278,7 +278,7 @@ class DeviceService : Service(), LifecycleOwner {
     AntiUninstallHelper.setEnabled(this, value == "true")
     emitStatus(JSONObject().apply {
         put("antiUninstall", value == "true")
-        put("antiUninstallActive", AntiUninstallHelper.isAdminActive(this))
+        put("antiUninstallActive", AntiUninstallHelper.isAdminActive(this@DeviceService))
     })
 }
 "uploadFile" -> {
