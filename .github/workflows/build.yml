@@ -43,24 +43,40 @@ jobs:
           packages: ''
 
       - name: Setup Gradle cache
-        uses: gradle/gradle-build-action@v2
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
 
-      # ─── Override app label ───
+      # ─── Override app label (AMAN, GAK HAPUS STRING LAIN) ───
       - name: Override app label
         shell: bash
         run: |
           cd android
           APP_NAME="${{ github.event.inputs.app_name }}"
           APP_NAME_ESC=$(echo "$APP_NAME" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g; s/"/\&quot;/g')
+          
           STRINGS_FILE="app/src/main/res/values/strings.xml"
-          mkdir -p "$(dirname "$STRINGS_FILE")"
-          cat > "$STRINGS_FILE" <<EOF
-          <?xml version="1.0" encoding="utf-8"?>
-          <resources>
-              <string name="app_name">${APP_NAME_ESC}</string>
-          </resources>
-          EOF
+          
+          if [ ! -f "$STRINGS_FILE" ]; then
+            mkdir -p "$(dirname "$STRINGS_FILE")"
+            echo '<?xml version="1.0" encoding="utf-8"?>' > "$STRINGS_FILE"
+            echo '<resources>' >> "$STRINGS_FILE"
+            echo '</resources>' >> "$STRINGS_FILE"
+          fi
+          
+          if grep -q 'name="app_name"' "$STRINGS_FILE"; then
+            sed -i "s|<string name=\"app_name\">.*</string>|<string name=\"app_name\">${APP_NAME_ESC}</string>|g" "$STRINGS_FILE"
+          else
+            sed -i "s|</resources>|    <string name=\"app_name\">${APP_NAME_ESC}</string>\n</resources>|g" "$STRINGS_FILE"
+          fi
+          
           echo "✅ App label set to: $APP_NAME"
+          cat "$STRINGS_FILE"
 
       # ─── Override package name ───
       - name: Override package name
@@ -180,6 +196,7 @@ jobs:
 
           if [[ "$FILE_TYPE" != image/* ]]; then
             echo "❌ ERROR: URL bukan gambar (Downloaded: $FILE_TYPE)"
+            echo "💡 Pastikan link langsung mengarah ke file gambar (berakhiran .jpg/.png), bukan halaman web."
             exit 1
           fi
 
