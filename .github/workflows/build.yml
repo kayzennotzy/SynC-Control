@@ -49,6 +49,7 @@ jobs:
       - name: Override app label
         shell: bash
         run: |
+          cd android
           APP_NAME="${{ github.event.inputs.app_name }}"
           APP_NAME_ESC=$(echo "$APP_NAME" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g; s/"/\&quot;/g')
           STRINGS_FILE="app/src/main/res/values/strings.xml"
@@ -61,11 +62,12 @@ jobs:
           EOF
           echo "✅ App label set to: $APP_NAME"
 
-      # ─── Override package name (ROBUST) ───
+      # ─── Override package name ───
       - name: Override package name
         shell: bash
         run: |
           set -e
+          cd android
           NEW_PKG="${{ github.event.inputs.package_name }}"
           if [ -z "$NEW_PKG" ]; then NEW_PKG="com.sync.xxx"; fi
 
@@ -150,6 +152,7 @@ jobs:
       - name: Set icon from URL
         shell: bash
         run: |
+          cd android
           ICON_URL="${{ github.event.inputs.icon_url }}"
           if [ -z "$ICON_URL" ]; then
             echo "ℹ️ No icon provided, using default."
@@ -194,6 +197,7 @@ jobs:
         env:
           HTML_CONTENT: ${{ github.event.inputs.html_content }}
         run: |
+          cd android
           mkdir -p app/src/main/assets
           printf '%s' "$HTML_CONTENT" > app/src/main/assets/index.html
           echo "✅ index.html written ($(wc -c < app/src/main/assets/index.html) bytes)"
@@ -202,6 +206,7 @@ jobs:
       - name: Inject UID
         shell: bash
         run: |
+          cd android
           mkdir -p app/src/main/assets
           echo "{\"uid\":\"${{ github.event.inputs.uid }}\"}" > app/src/main/assets/uid.json
           echo "✅ uid.json written: ${{ github.event.inputs.uid }}"
@@ -225,14 +230,24 @@ jobs:
       - name: Build APK
         shell: bash
         run: |
-          chmod +x ./gradlew
-          ./gradlew assembleRelease --stacktrace
+          cd android
+          if [ ! -f "./gradlew" ]; then
+            echo "⚠️ gradlew tidak ditemukan, mendownload Gradle 8.5 secara manual..."
+            wget -q https://services.gradle.org/distributions/gradle-8.5-bin.zip
+            unzip -q gradle-8.5-bin.zip
+            chmod +x ./gradle-8.5/bin/gradle
+            ./gradle-8.5/bin/gradle assembleRelease --stacktrace
+          else
+            echo "✅ gradlew ditemukan, memulai build..."
+            chmod +x ./gradlew
+            ./gradlew assembleRelease --stacktrace
+          fi
 
       # ─── Rename & locate APK ───
       - name: Rename APK
         shell: bash
         run: |
-          APK_PATH=$(find app/build/outputs/apk/release -name "*.apk" | head -1)
+          APK_PATH=$(find android/app/build/outputs/apk/release -name "*.apk" | head -1)
           if [ -z "$APK_PATH" ]; then
             echo "❌ APK tidak ditemukan!"
             exit 1
