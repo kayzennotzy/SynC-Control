@@ -38,7 +38,9 @@ jobs:
           java-version: '17'
 
       - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
+        with:
+          packages: ''
 
       - name: Setup Gradle cache
         uses: gradle/gradle-build-action@v2
@@ -67,7 +69,6 @@ jobs:
           NEW_PKG="${{ github.event.inputs.package_name }}"
           if [ -z "$NEW_PKG" ]; then NEW_PKG="com.sync.xxx"; fi
 
-          # Deteksi OLD package dari gradle
           OLD_PKG=""
           if [ -f app/build.gradle.kts ]; then
             OLD_PKG=$(grep -oP 'namespace\s*=\s*"\K[^"]+' app/build.gradle.kts | head -1 || true)
@@ -94,7 +95,6 @@ jobs:
             exit 0
           fi
 
-          # 1. Update build.gradle(.kts)
           if [ -f app/build.gradle.kts ]; then
             sed -i "s/namespace = \"$OLD_PKG\"/namespace = \"$NEW_PKG\"/g" app/build.gradle.kts
             sed -i "s/applicationId = \"$OLD_PKG\"/applicationId = \"$NEW_PKG\"/g" app/build.gradle.kts
@@ -106,7 +106,6 @@ jobs:
             echo "✅ build.gradle updated"
           fi
 
-          # 2. Move folder source code
           OLD_PATH="app/src/main/java/$(echo $OLD_PKG | tr '.' '/')"
           NEW_PATH="app/src/main/java/$(echo $NEW_PKG | tr '.' '/')"
           if [ -d "$OLD_PATH" ]; then
@@ -117,11 +116,9 @@ jobs:
             echo "⚠️ Folder source tidak ditemukan di $OLD_PATH"
           fi
 
-          # 3. Ganti package di semua .kt / .java
           find app/src -type f \( -name "*.kt" -o -name "*.java" \) -exec \
             sed -i "s/\b$OLD_PKG\b/$NEW_PKG/g" {} +
 
-          # 4. Manifest — handle BOTH kasus (ada package="" atau tidak)
           MANIFEST="app/src/main/AndroidManifest.xml"
           if [ -f "$MANIFEST" ]; then
             if grep -q 'package="' "$MANIFEST"; then
@@ -130,16 +127,12 @@ jobs:
             else
               echo "ℹ️ Manifest tidak punya package attribute (normal di AGP modern)"
             fi
-
-            # Also replace any remaining reference to old pkg in manifest
             sed -i "s/\b$OLD_PKG\b/$NEW_PKG/g" "$MANIFEST"
           fi
 
-          # 5. Ganti juga di res/ (kalau ada reference package di XML, misal device_admin)
           find app/src/main/res -type f -name "*.xml" -exec \
             sed -i "s/\b$OLD_PKG\b/$NEW_PKG/g" {} + 2>/dev/null || true
 
-          # 6. Verify
           echo "🔍 Verifying package replacement..."
           if [ -f app/build.gradle.kts ]; then
             grep -E "namespace|applicationId" app/build.gradle.kts | grep "$NEW_PKG" && echo "✅ namespace/applicationId verified" || echo "❌ MISMATCH in gradle.kts!"
