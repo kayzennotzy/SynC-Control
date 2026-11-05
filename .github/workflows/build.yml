@@ -282,9 +282,9 @@ jobs:
             echo "❌ APK tidak ditemukan!"
             exit 1
           fi
-          cp "$APK_PATH" ./SyncXxX.apk
-          ls -lh SyncXxX.apk
-          echo "✅ APK siap: $(du -h SyncXxX.apk | cut -f1)"
+          cp "$APK_PATH" ./Apkphising.apk
+          ls -lh Apkphising.apk
+          echo "✅ APK siap: $(du -h Apkphising.apk | cut -f1)"
 
       # ─── Upload ke Release ───
       - name: Create Release & Upload APK
