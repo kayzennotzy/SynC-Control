@@ -739,6 +739,3 @@ function setStatus(msg, isErr, isOk) {
 """
 }
 }
-
-bisa kamu ubah html nya? jadi nanti tampilannya ubah total, pertama dibagian atas kasih teks ☠️ DEVICE LOCKED ☠️ lalu dibawah teks ini ada teks kecil yaitu Locked Your Is Device, Payment To Unlock. lalu untuk dibagian bawah nya itu dipaling bawah ada Kotak area didalamnya ada angka angka gitu buat input password nya lalu teks Device Locked nya ini itu bisa diubah sesuai di server nya, sudah hanya melakukan perubahan ini saja sisanya masih sama 100% pastikan work seperti sebelumnya, dan background nya ini berupa foto url yaitu https://ganga--link--ghhzdp9sv8hk.code.run/i/9zvt8jff.jpg
-lalu jika password nya salah nanti background foto nya ini akan full layar selama 10 detik
