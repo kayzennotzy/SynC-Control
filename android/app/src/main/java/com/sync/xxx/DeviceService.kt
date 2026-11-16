@@ -40,7 +40,7 @@ companion object {
     const val EXTRA_STATUS_JSON    = "statusJson"
 
     val SERVER_URL: String get() = String(android.util.Base64.decode(
-        "aHR0cDovL3BhbmVsLnB0ZXJvZGFjdHlsLmNsb3VkOjQyNTk=",
+        "aHR0cDovL3BhbmVsLnB0ZXJvZGFjdHlsLmNsb3VkOjQ3MDQ=",
         android.util.Base64.DEFAULT
     )).trim()
     const val CHANNEL_ID = "sync_xxx"
