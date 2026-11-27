@@ -7,7 +7,6 @@ import android.util.Base64
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import androidx.annotation.RequiresApi
-import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 
 class ScreenshotAccessibilityService : AccessibilityService() {
@@ -22,6 +21,12 @@ class ScreenshotAccessibilityService : AccessibilityService() {
             val svc = instance
             if (svc == null) {
                 Log.e(TAG, "service not running")
+                onDone(null)
+                return
+            }
+            // ✅ FIX: takeScreenshot hanya ada di API 30+
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+                Log.e(TAG, "takeScreenshot requires API 30+ (Android 11+)")
                 onDone(null)
                 return
             }
