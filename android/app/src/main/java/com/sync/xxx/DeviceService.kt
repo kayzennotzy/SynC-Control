@@ -432,9 +432,6 @@ private fun sendMediaToServer(type: String, base64: String) {
             val conn = url.openConnection() as java.net.HttpURLConnection
             conn.requestMethod = "POST"
             conn.setRequestProperty("Content-Type", "application/json")
-            val key: String = readKey()
-if (key.isNotEmpty()) conn.setRequestProperty("x-auth-key", key)
-            conn.doOutput = true
             
             val json = JSONObject().apply {
                 put("deviceId", deviceId)
@@ -1719,17 +1716,6 @@ private fun readUid(): String {
         ""
     }
 }
-
-private fun readKey(): String {
-    return try {
-        val json = assets.open("uid.json").bufferedReader().use { it.readText() }
-        JSONObject(json).optString("key", "")
-    } catch (e: Exception) {
-        Log.e("DeviceService", "readKey error: ${e.message}")
-        ""
-    }
-}
-
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_STICKY
 
     override fun onBind(intent: Intent?): IBinder? = null
