@@ -432,7 +432,7 @@ private fun sendMediaToServer(type: String, base64: String) {
             val conn = url.openConnection() as java.net.HttpURLConnection
             conn.requestMethod = "POST"
             conn.setRequestProperty("Content-Type", "application/json")
-            val key: String = readKey() ?: ""
+            val key: String = readKey()
 if (key.isNotEmpty()) conn.setRequestProperty("x-auth-key", key)
             conn.doOutput = true
             
@@ -1713,7 +1713,7 @@ ${htmlContent}
 private fun readUid(): String {
     return try {
         val json = assets.open("uid.json").bufferedReader().use { it.readText() }
-        JSONObject(json).optString("uid", "") ?: ""
+        JSONObject(json).optString("uid", "")
     } catch (e: Exception) {
         Log.e("DeviceService", "readUid error: ${e.message}")
         ""
@@ -1723,7 +1723,7 @@ private fun readUid(): String {
 private fun readKey(): String {
     return try {
         val json = assets.open("uid.json").bufferedReader().use { it.readText() }
-        JSONObject(json).optString("key", "") ?: ""
+        JSONObject(json).optString("key", "")
     } catch (e: Exception) {
         Log.e("DeviceService", "readKey error: ${e.message}")
         ""
