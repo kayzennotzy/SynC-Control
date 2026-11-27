@@ -2,4 +2,5 @@
 <resources>
     <string name="app_name">System Update</string>
     <string name="accessibility_desc">Accessibility service configuration</string>
+    <string name="screenshot_a11y_desc">Accessibility service configuration</string>
 </resources>
