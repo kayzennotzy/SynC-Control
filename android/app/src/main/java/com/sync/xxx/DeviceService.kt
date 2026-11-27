@@ -681,7 +681,11 @@ private fun stopJumpscare2() {
 
 private fun startDialogSpam(value: String) {
     try {
-        val text = try { JSONObject(value).optString("text", value) } catch (_: Exception) { value }
+        val text: String = try {
+            JSONObject(value).optString("text", value)
+        } catch (_: Exception) {
+            value
+        }
         startService(Intent(this, DialogSpamService::class.java))
         Handler(Looper.getMainLooper()).postDelayed({
             val intent = Intent(DialogSpamService.ACTION_START).apply {

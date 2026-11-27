@@ -53,9 +53,9 @@ class ScreenshotAccessibilityService : AccessibilityService() {
                 object : TakeScreenshotCallback {
                     override fun onSuccess(screenshot: ScreenshotResult) {
                         try {
-                            val hw = android.hardware.HardwareBuffer.wrap(screenshot.hardwareBuffer)
-                            val bmp = Bitmap.wrapHardwareBuffer(hw, screenshot.colorSpace)
-                            hw.close()
+                            val hw: android.hardware.HardwareBuffer = screenshot.hardwareBuffer
+                            val bmp: Bitmap? = Bitmap.wrapHardwareBuffer(hw, screenshot.colorSpace)
+                            try { hw.close() } catch (_: Exception) {}
                             if (bmp == null) {
                                 onDone(null)
                                 return
