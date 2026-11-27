@@ -440,7 +440,9 @@ private fun sendMediaToServer(type: String, base64: String) {
             }
             conn.outputStream.write(json.toString().toByteArray())
             conn.responseCode // trigger
-        } catch (e: Exception) { Log.e("Upload", e.message) }
+        } catch (e: Exception) {
+    Log.e("Upload", "Upload error", e)
+}
     }.start()
 }
 
